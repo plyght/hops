@@ -1,0 +1,15 @@
+[sandbox]
+root = "/tmp/sandbox"
+
+[capabilities]
+network = "disabled"
+
+[capabilities.filesystem]
+read = ["/tmp/sandbox"]
+write = ["/tmp/sandbox/output"]
+execute = []
+
+[resources]
+cpus = 1
+memory = "256M"
+max_processes = 10

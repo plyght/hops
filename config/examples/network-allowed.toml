@@ -1,0 +1,15 @@
+[sandbox]
+root = "./project"
+
+[capabilities]
+network = "outbound"
+
+[capabilities.filesystem]
+read = ["./project", "/usr/lib", "/etc/ssl", "/etc/resolv.conf"]
+write = ["./project/data", "./project/logs"]
+execute = ["./project/bin"]
+
+[resources]
+cpus = 4
+memory = "1G"
+max_processes = 200

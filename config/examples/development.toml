@@ -1,0 +1,15 @@
+[sandbox]
+root = "."
+
+[capabilities]
+network = "loopback"
+
+[capabilities.filesystem]
+read = [".", "/usr/lib", "/usr/local/lib", "/System/Library"]
+write = [".", "/tmp"]
+execute = [".", "/usr/bin", "/usr/local/bin"]
+
+[resources]
+cpus = 8
+memory = "4G"
+max_processes = 500

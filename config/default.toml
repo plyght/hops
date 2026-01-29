@@ -1,0 +1,15 @@
+[sandbox]
+root = "."
+
+[capabilities]
+network = "disabled"
+
+[capabilities.filesystem]
+read = ["."]
+write = []
+execute = ["."]
+
+[resources]
+cpus = 2
+memory = "512M"
+max_processes = 100

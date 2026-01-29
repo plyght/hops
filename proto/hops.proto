@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package hops;
+
+service HopsService {
+  rpc RunSandbox(RunRequest) returns (RunResponse);
+  rpc StopSandbox(StopRequest) returns (StopResponse);
+  rpc ListSandboxes(ListRequest) returns (ListResponse);
+  rpc GetStatus(StatusRequest) returns (SandboxStatus);
+}
+
+message RunRequest {
+  repeated string command = 1;
+  optional string policy_path = 2;
+  optional Policy inline_policy = 3;
+  map<string, string> environment = 4;
+  optional string working_directory = 5;
+}
+
+message RunResponse {
+  string sandbox_id = 1;
+  int32 pid = 2;
+  bool success = 3;
+  optional string error = 4;
+}
+
+message StopRequest {
+  string sandbox_id = 1;
+  bool force = 2;
+}
+
+message StopResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+message ListRequest {
+  bool include_stopped = 1;
+}
+
+message ListResponse {
+  repeated SandboxInfo sandboxes = 1;
+}
+
+message StatusRequest {
+  string sandbox_id = 1;
+}
+
+message SandboxStatus {
+  string sandbox_id = 1;
+  int32 pid = 2;
+  SandboxState state = 3;
+  repeated string command = 4;
+  int64 start_time = 5;
+  optional int64 end_time = 6;
+  optional int32 exit_code = 7;
+  ResourceUsage resource_usage = 8;
+}
+
+message SandboxInfo {
+  string sandbox_id = 1;
+  int32 pid = 2;
+  SandboxState state = 3;
+  repeated string command = 4;
+}
+
+enum SandboxState {
+  SANDBOX_STATE_UNKNOWN = 0;
+  SANDBOX_STATE_STARTING = 1;
+  SANDBOX_STATE_RUNNING = 2;
+  SANDBOX_STATE_STOPPED = 3;
+  SANDBOX_STATE_FAILED = 4;
+}
+
+message Policy {
+  SandboxConfig sandbox = 1;
+  Capabilities capabilities = 2;
+  ResourceLimits resources = 3;
+}
+
+message SandboxConfig {
+  string root = 1;
+}
+
+message Capabilities {
+  NetworkAccess network = 1;
+  FilesystemCapabilities filesystem = 2;
+}
+
+enum NetworkAccess {
+  NETWORK_ACCESS_DISABLED = 0;
+  NETWORK_ACCESS_OUTBOUND = 1;
+  NETWORK_ACCESS_LOOPBACK = 2;
+  NETWORK_ACCESS_FULL = 3;
+}
+
+message FilesystemCapabilities {
+  repeated string read = 1;
+  repeated string write = 2;
+  repeated string execute = 3;
+}
+
+message ResourceLimits {
+  int32 cpus = 1;
+  string memory = 2;
+  int32 max_processes = 3;
+}
+
+message ResourceUsage {
+  double cpu_percent = 1;
+  uint64 memory_bytes = 2;
+  int32 process_count = 3;
+}
