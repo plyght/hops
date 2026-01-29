@@ -77,7 +77,11 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
                 policy = try convertProtoPolicy(request.inlinePolicy)
             }
             
-            let rootfs = URL(fileURLWithPath: request.workingDirectory)
+            let homeDir = FileManager.default.homeDirectoryForCurrentUser
+            let initfsPath = homeDir
+                .appendingPathComponent(".hops")
+                .appendingPathComponent("initfs")
+            let rootfs = initfsPath
             
             let status = try await manager.runSandbox(
                 id: sandboxId,
@@ -93,6 +97,8 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             
             return response
         } catch {
+            print("ERROR in runSandbox: \(error)")
+            fflush(stdout)
             var response = Hops_RunResponse()
             response.success = false
             response.error = error.localizedDescription
@@ -116,7 +122,11 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             policy = try convertProtoPolicy(request.inlinePolicy)
         }
         
-        let rootfs = URL(fileURLWithPath: request.workingDirectory)
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let initfsPath = homeDir
+            .appendingPathComponent(".hops")
+            .appendingPathComponent("initfs")
+        let rootfs = initfsPath
         
         let stream = await manager.runSandboxStreaming(
             id: sandboxId,

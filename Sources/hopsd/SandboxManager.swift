@@ -72,15 +72,29 @@ actor SandboxManager {
             throw SandboxManagerError.containerAlreadyExists(id)
         }
         
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let hopsDir = homeDir.appendingPathComponent(".hops")
+        let containersDir = hopsDir.appendingPathComponent("containers")
+        let containerDir = containersDir.appendingPathComponent(id)
+        
+        try? FileManager.default.createDirectory(at: containersDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: containerDir, withIntermediateDirectories: true)
+        
+        let containerRootfs = containerDir.appendingPathComponent("rootfs.ext4")
+        
+        if !FileManager.default.fileExists(atPath: containerRootfs.path) {
+            try FileManager.default.copyItem(at: rootfs, to: containerRootfs)
+        }
+        
         logger.info("Creating container", metadata: [
             "id": "\(id)",
             "policy": "\(policy.name)",
-            "rootfs": "\(rootfs.path)"
+            "rootfs": "\(containerRootfs.path)"
         ])
         
         let rootfsMount = Mount.block(
             format: "ext4",
-            source: rootfs.path,
+            source: containerRootfs.path,
             destination: "/"
         )
         
@@ -138,15 +152,29 @@ actor SandboxManager {
                         throw SandboxManagerError.containerAlreadyExists(id)
                     }
                     
+                    let homeDir = FileManager.default.homeDirectoryForCurrentUser
+                    let hopsDir = homeDir.appendingPathComponent(".hops")
+                    let containersDir = hopsDir.appendingPathComponent("containers")
+                    let containerDir = containersDir.appendingPathComponent(id)
+                    
+                    try? FileManager.default.createDirectory(at: containersDir, withIntermediateDirectories: true)
+                    try? FileManager.default.createDirectory(at: containerDir, withIntermediateDirectories: true)
+                    
+                    let containerRootfs = containerDir.appendingPathComponent("rootfs.ext4")
+                    
+                    if !FileManager.default.fileExists(atPath: containerRootfs.path) {
+                        try FileManager.default.copyItem(at: rootfs, to: containerRootfs)
+                    }
+                    
                     logger.info("Creating container with streaming", metadata: [
                         "id": "\(id)",
                         "policy": "\(policy.name)",
-                        "rootfs": "\(rootfs.path)"
+                        "rootfs": "\(containerRootfs.path)"
                     ])
                     
                     let rootfsMount = Mount.block(
                         format: "ext4",
-                        source: rootfs.path,
+                        source: containerRootfs.path,
                         destination: "/"
                     )
                     
@@ -202,6 +230,9 @@ actor SandboxManager {
                     
                     continuation.finish()
                 } catch {
+                    logger.error("ERROR in runSandboxStreaming: \(error)")
+                    print("ERROR in runSandboxStreaming: \(error)")
+                    fflush(stdout)
                     continuation.finish(throwing: error)
                 }
             }

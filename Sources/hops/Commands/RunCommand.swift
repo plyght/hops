@@ -45,7 +45,7 @@ struct RunCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable verbose output")
     var verbose: Bool = false
     
-    @Flag(name: .long, help: "Enable streaming output (default: true)")
+    @Flag(name: .long, inversion: .prefixedNo, help: "Enable streaming output")
     var stream: Bool = true
     
     @Argument(parsing: .remaining, help: "Command to execute inside the sandbox")
