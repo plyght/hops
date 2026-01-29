@@ -12,6 +12,8 @@ Multi-component macOS 26+ sandboxing system: CLI (hops), daemon (hopsd), GUI (ho
 ### Swift
 ```bash
 swift build                                           # Build all (type checks)
+codesign -s - --entitlements hopsd.entitlements \
+  --force .build/debug/hopsd                          # Sign hopsd (required for virtualization)
 swift build -c release                                # Release build
 swift build --target hops                             # Specific target
 swift test                                            # All tests
@@ -262,7 +264,9 @@ case .missingKernel(let path):
 
 ```bash
 # Development
-swift build && swift test
+swift build
+codesign -s - --entitlements hopsd.entitlements --force .build/debug/hopsd
+swift test
 swift test --filter PolicyParserTests/testMethod
 
 # Daemon

@@ -11,17 +11,24 @@ struct Hops: AsyncParsableCommand {
       Run untrusted code safely with filesystem, network, and resource restrictions.
 
       Examples:
-        hops run ./project -- python script.py
-        hops run --profile untrusted ./code -- npm test
+        hops init
+        hops run python script.py
+        hops exec echo "Hello"
+        hops shell
+        hops run --profile untrusted npm test
         hops profile list
         hops system start
       """,
     version: "0.1.0",
     subcommands: [
+      InitCommand.self,
       RunCommand.self,
+      ExecCommand.self,
+      ShellCommand.self,
       ProfileCommand.self,
       SystemCommand.self,
-      RootfsCommand.self
+      RootfsCommand.self,
+      DoctorCommand.self
     ]
   )
 }

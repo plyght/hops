@@ -11,15 +11,15 @@ public enum PolicyParserError: Error, CustomStringConvertible {
   public var description: String {
     switch self {
     case .invalidTOML(let message):
-      return "Invalid TOML: \(message)"
+      return ErrorMessages.invalidPolicyFile(path: "(inline)", reason: message)
     case .missingRequiredField(let field):
-      return "Missing required field: \(field)"
+      return ErrorMessages.invalidPolicyFile(path: "(current)", reason: "Missing required field: \(field)")
     case .invalidFieldValue(let field, let reason):
-      return "Invalid value for field '\(field)': \(reason)"
+      return ErrorMessages.invalidPolicyFile(path: "(current)", reason: "Invalid \(field): \(reason)")
     case .fileNotFound(let path):
-      return "Policy file not found: \(path)"
+      return ErrorMessages.invalidPolicyFile(path: path, reason: "File not found")
     case .unreadableFile(let path):
-      return "Cannot read policy file: \(path)"
+      return ErrorMessages.permissionDenied(path: path, operation: "read")
     }
   }
 }

@@ -40,43 +40,90 @@ Download from [Apple Container releases](https://github.com/apple/container/rele
 
 ## Quick Start
 
-### 1. Build and Install
+### Option 1: Automated Installation (Recommended)
 
 ```bash
 git clone https://github.com/plyght/hops.git
 cd hops
-./build-and-sign.sh
-sudo cp .build/debug/hops /usr/local/bin/
-sudo cp .build/debug/hopsd /usr/local/bin/
+make install
 ```
 
-### 2. Download Runtime Files
+The installation script will:
+- Build the project in release mode
+- Code sign hopsd with proper entitlements
+- Install binaries to /usr/local/bin
+- Create ~/.hops directory structure
+- Download runtime files (vmlinux, initfs)
+- Create Alpine rootfs image
+
+Then start the daemon and run your first command:
 
 ```bash
+hops system start
+hops run /tmp -- /bin/echo "Hello from Hops!"
+```
+
+### Option 2: Manual Installation
+
+If you prefer manual control:
+
+```bash
+git clone https://github.com/plyght/hops.git
+cd hops
+make build
+sudo cp .build/release/hops /usr/local/bin/
+sudo cp .build/release/hopsd /usr/local/bin/
+sudo cp .build/release/hops-create-rootfs /usr/local/bin/
+hops init
+hops system start
+```
+
+### Option 3: Step-by-Step (Legacy)
+
+<details>
+<summary>Click to expand manual steps</summary>
+
+#### 1. Build and Install
+
+```bash
+git clone https://github.com/plyght/hops.git
+cd hops
+swift build -c release
+codesign -s - --entitlements hopsd.entitlements --force .build/release/hopsd
+sudo cp .build/release/hops /usr/local/bin/
+sudo cp .build/release/hopsd /usr/local/bin/
+sudo cp .build/release/hops-create-rootfs /usr/local/bin/
+```
+
+#### 2. Download Runtime Files
+
+```bash
+mkdir -p ~/.hops
 cd ~/.hops
-wget https://github.com/apple/container/releases/latest/download/vmlinux
-wget https://github.com/apple/container/releases/latest/download/init.block
-mv init.block initfs
-wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz
+curl -L -o vmlinux https://github.com/apple/container/releases/latest/download/vmlinux
+curl -L -o initfs https://github.com/apple/container/releases/latest/download/init.block
+curl -L -o alpine-minirootfs.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz
 ```
 
-### 3. Create Alpine Rootfs
+#### 3. Create Alpine Rootfs
 
 ```bash
-.build/debug/hops-create-rootfs
+hops-create-rootfs
 ```
 
-### 4. Start Daemon
+#### 4. Start Daemon
 
 ```bash
-.build/debug/hopsd > /tmp/hopsd.log 2>&1 &
+hops system start
 ```
 
-### 5. Run a Command
+#### 5. Run a Command
 
 ```bash
-.build/debug/hops run /tmp -- /bin/echo "Hello from Hops!"
+hops run /tmp -- /bin/echo "Hello from Hops!"
 ```
+
+</details>
 
 See [docs/setup.md](docs/setup.md) for detailed installation and [launchd/README.md](launchd/README.md) for daemon management.
 
@@ -94,6 +141,15 @@ hops-gui
 ### Basic Commands
 
 ```bash
+# Initialize environment (download runtime files)
+hops init
+
+# Check environment setup
+hops init --check-only
+
+# Verify system health
+hops doctor
+
 # Run a command in sandbox
 hops run /tmp -- /bin/echo "Hello"
 
@@ -238,12 +294,28 @@ hops-gui (Rust)
 ## Development
 
 ```bash
-# Build
+# Build with Makefile (recommended)
+make build                  # Release build with code signing
+make build BUILD_MODE=debug # Debug build
+
+# Or build manually
 swift build
-./build-and-sign.sh
+
+# Code signing (required for hopsd to use virtualization)
+codesign -s - --entitlements hopsd.entitlements --force .build/debug/hopsd
 
 # Run tests
-swift test
+make test
+# Or: swift test
+
+# Clean build artifacts
+make clean
+
+# Install locally
+make install
+
+# Uninstall
+make uninstall
 
 # Regenerate gRPC stubs (after modifying proto/hops.proto)
 ./generate-proto.sh
@@ -289,6 +361,45 @@ Known Limitations:
 - [config/README.md](config/README.md) - Policy configuration reference
 - [launchd/README.md](launchd/README.md) - Daemon management
 - [docs/testing.md](docs/testing.md) - Test coverage report
+
+## Quick Reference
+
+### Installation
+```bash
+make install              # Automated installation
+make build                # Build only
+make uninstall            # Remove binaries
+```
+
+### Setup
+```bash
+hops init                 # Download runtime files
+hops init --check-only    # Verify setup
+hops doctor               # Diagnose issues
+```
+
+### Daemon
+```bash
+hops system start         # Start daemon
+hops system stop          # Stop daemon
+hops system status        # Check status
+hops system restart       # Restart daemon
+```
+
+### Running Commands
+```bash
+hops run <path> -- <cmd>                    # Basic usage
+hops run --network outbound <path> -- <cmd> # With network
+hops run --cpus 2 --memory 512M <path> -- <cmd> # Resource limits
+hops run --profile untrusted <path> -- <cmd>    # With profile
+```
+
+### Profiles
+```bash
+hops profile list                           # List profiles
+hops profile show <name>                    # Show profile
+hops profile create <name>                  # Create profile
+```
 
 ## License
 

@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import GRPC
+import HopsCore
 import HopsProto
 import NIO
 
@@ -47,6 +48,12 @@ extension SystemCommand {
         return
       }
 
+      let isFirstTime = checkFirstTimeSetup()
+      if isFirstTime {
+        print(ErrorMessages.firstTimeWelcome())
+        print()
+      }
+
       if foreground {
         print("Starting Hops daemon in foreground mode...")
         print("Press Ctrl+C to stop.")
@@ -63,10 +70,35 @@ extension SystemCommand {
           print()
           let status = try await getDaemonStatus()
           printStatus(status)
+          
+          if isFirstTime {
+            print()
+            print("Next steps:")
+            print("  1. Check system health: hops doctor")
+            print("  2. Run a test command: hops run /tmp -- echo \"Hello!\"")
+          }
         } else {
-          throw ValidationError("Failed to start daemon. Check logs at ~/.hops/logs/hopsd.log")
+          throw ValidationError(ErrorMessages.daemonStartupFailed(logPath: "~/.hops/logs/hopsd.log"))
         }
       }
+    }
+
+    private func checkFirstTimeSetup() -> Bool {
+      let homeDir = FileManager.default.homeDirectoryForCurrentUser
+      let hopsDir = homeDir.appendingPathComponent(".hops")
+      let pidFile = hopsDir.appendingPathComponent("hopsd.pid")
+      let firstRunMarker = hopsDir.appendingPathComponent(".first_run")
+      
+      if FileManager.default.fileExists(atPath: firstRunMarker.path) {
+        return false
+      }
+      
+      if !FileManager.default.fileExists(atPath: pidFile.path) {
+        try? "".write(to: firstRunMarker, atomically: true, encoding: .utf8)
+        return true
+      }
+      
+      return false
     }
 
     private func launchDaemonBackground() async throws {
@@ -116,6 +148,8 @@ extension SystemCommand {
         return path
       }
 
+      print(ErrorMessages.formatInColor("Warning: hopsd binary not found in expected locations", color: .yellow))
+      print("Trying 'hopsd' from PATH...")
       return "hopsd"
     }
   }

@@ -14,22 +14,27 @@ struct RunCommand: AsyncParsableCommand {
     discussion: """
       Execute a command with filesystem, network, and resource isolation.
 
-      The sandbox root directory is specified with <path>. All filesystem
-      access is restricted to this directory unless additional mounts are configured.
+      The sandbox root directory defaults to the current directory (.).
+      If not suitable for sandboxing, /tmp is used. You can override with --path.
+
+      The daemon is automatically started if not running. Use --no-auto-start
+      to disable this behavior and require manual daemon management.
+
+      The -- separator is optional when the command is unambiguous. Use it when
+      your command has flags that might conflict with hops options.
 
       Examples:
-        hops run ./myproject -- ./build.sh
-        hops run --profile untrusted ./code -- python script.py
-        hops run --network disabled --memory 512M ./project -- npm test
-        hops run --cpus 2 --max-processes 100 ./workdir -- cargo build --release
-        hops run --image alpine:3.19 /tmp -- /bin/sh
-        hops run --image ubuntu:22.04 --network outbound /tmp -- apt update
-        echo "ls -la" | hops run --no-interactive /tmp -- /bin/sh
+        hops run echo "Hello"
+        hops run python script.py
+        hops run --profile untrusted npm test
+        hops run --network disabled --memory 512M cargo build
+        hops run --path /tmp -- /bin/sh -c "ls -la"
+        echo "ls -la" | hops run --no-interactive /bin/sh
       """
   )
 
-  @Argument(help: "Root directory for the sandbox")
-  var path: String
+  @Option(name: .long, help: "Root directory for the sandbox (defaults to current directory or /tmp)")
+  var path: String?
 
   @Option(name: .long, help: "Named profile to use (default, untrusted, build, etc.)")
   var profile: String?
@@ -64,17 +69,20 @@ struct RunCommand: AsyncParsableCommand {
   @Flag(name: .long, inversion: .prefixedNo, help: "Allocate TTY for interactive sessions (automatic when using a terminal)")
   var interactive: Bool = true
 
+  @Flag(name: .long, help: "Disable automatic daemon startup")
+  var noAutoStart: Bool = false
+
   @Argument(parsing: .remaining, help: "Command to execute inside the sandbox")
   var command: [String] = []
 
   func validate() throws {
     guard !command.isEmpty else {
-      throw ValidationError("No command specified. Use -- to separate the command from options.")
+      throw ValidationError(ErrorMessages.missingCommand())
     }
   }
 
   mutating func run() async throws {
-    let sandboxPath = expandPath(path)
+    let sandboxPath = expandPath(determineDefaultPath())
     let allocateTty = interactive && isStdinTTY()
 
     if verbose {
@@ -135,7 +143,8 @@ struct RunCommand: AsyncParsableCommand {
       }
 
       guard let profilePath = foundPath else {
-        throw ValidationError("Profile '\(profileName)' not found in any profile directory")
+        let searchedPaths = directories.map { $0.path }
+        throw ValidationError(ErrorMessages.profileNotFound(name: profileName, searchedPaths: searchedPaths))
       }
 
       policy = try Policy.load(fromTOMLFile: profilePath.path)
@@ -185,6 +194,10 @@ struct RunCommand: AsyncParsableCommand {
     policy: Policy,
     allocateTty: Bool
   ) async throws -> Int32 {
+    if !noAutoStart {
+      try await ensureDaemonRunning()
+    }
+    
     let client = try await DaemonClient.connect()
 
     var originalTermios: termios?
@@ -242,6 +255,25 @@ struct RunCommand: AsyncParsableCommand {
     return isatty(STDIN_FILENO) != 0
   }
 
+  private func determineDefaultPath() -> String {
+    if let userPath = path {
+      return userPath
+    }
+    
+    let currentDir = FileManager.default.currentDirectoryPath
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+    
+    if currentDir.hasPrefix(homeDir) && currentDir != homeDir {
+      return "."
+    }
+    
+    if currentDir.hasPrefix("/Users/") || currentDir.hasPrefix("/home/") {
+      return "."
+    }
+    
+    return "/tmp"
+  }
+  
   private func expandPath(_ path: String) -> String {
     if path.hasPrefix("~") {
       return NSString(string: path).expandingTildeInPath
@@ -301,6 +333,16 @@ struct RunCommand: AsyncParsableCommand {
       return "\(bytes)B"
     }
   }
+  
+  private func ensureDaemonRunning() async throws {
+    let daemonManager = DaemonManager()
+    
+    if await daemonManager.isRunning() {
+      return
+    }
+    
+    try await daemonManager.ensureRunning(verbose: verbose)
+  }
 }
 
 struct DaemonClient {
@@ -324,20 +366,32 @@ struct DaemonClient {
       .appendingPathComponent("hops.sock")
       .path
 
+    guard FileManager.default.fileExists(atPath: socketPath) else {
+      throw DaemonClientError.connectionFailed(
+        ErrorMessages.daemonNotRunning()
+      )
+    }
+
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
-    let channel = try GRPCChannelPool.with(
-      target: .unixDomainSocket(socketPath),
-      transportSecurity: .plaintext,
-      eventLoopGroup: group
-    )
+    do {
+      let channel = try GRPCChannelPool.with(
+        target: .unixDomainSocket(socketPath),
+        transportSecurity: .plaintext,
+        eventLoopGroup: group
+      )
 
-    let client = Hops_HopsServiceAsyncClient(
-      channel: channel,
-      defaultCallOptions: CallOptions()
-    )
+      let client = Hops_HopsServiceAsyncClient(
+        channel: channel,
+        defaultCallOptions: CallOptions()
+      )
 
-    return DaemonClient(client: client, group: group, channel: channel)
+      return DaemonClient(client: client, group: group, channel: channel)
+    } catch {
+      throw DaemonClientError.connectionFailed(
+        ErrorMessages.daemonConnectionFailed(socketPath: socketPath, error: error.localizedDescription)
+      )
+    }
   }
 
   func execute(
@@ -617,6 +671,16 @@ struct DaemonClient {
   }
 }
 
-enum DaemonClientError: Error {
+enum DaemonClientError: Error, CustomStringConvertible {
   case executionFailed(String)
+  case connectionFailed(String)
+
+  var description: String {
+    switch self {
+    case .executionFailed(let message):
+      return message
+    case .connectionFailed(let message):
+      return message
+    }
+  }
 }

@@ -16,35 +16,27 @@ public enum PolicyValidationError: Error, CustomStringConvertible {
   public var description: String {
     switch self {
     case .emptyName:
-      return "Policy name cannot be empty"
+      return ErrorMessages.invalidPolicyFile(path: "(current)", reason: "Policy name cannot be empty")
     case .invalidVersion(let version):
-      return "Invalid version format: \(version)"
+      return ErrorMessages.invalidPolicyFile(path: "(current)", reason: "Invalid version format: \(version). Use semantic versioning (e.g., 1.0.0)")
     case .invalidRootPath(let path):
-      return "Invalid root path: \(path)"
+      return ErrorMessages.invalidPathInPolicy(path: path, reason: "Root path must be absolute")
     case .invalidWorkingDirectory(let path):
-      return "Invalid working directory: \(path)"
+      return ErrorMessages.invalidPathInPolicy(path: path, reason: "Working directory must be absolute")
     case .mountSourceNotAbsolute(let source):
-      return "Mount source must be absolute path: \(source)"
+      return ErrorMessages.invalidPathInPolicy(path: source, reason: "Mount source must be absolute")
     case .mountDestinationNotAbsolute(let destination):
-      return "Mount destination must be absolute path: \(destination)"
+      return ErrorMessages.invalidPathInPolicy(path: destination, reason: "Mount destination must be absolute")
     case .conflictingPaths(let path1, let path2):
-      return "Conflicting paths: \(path1) and \(path2)"
+      return ErrorMessages.invalidPathInPolicy(path: "\(path1), \(path2)", reason: "Paths conflict or overlap")
     case .resourceLimitTooHigh(let resource, let value):
-      return "Resource limit too high for \(resource): \(value)"
+      return ErrorMessages.resourceLimitExceeded(resource: resource, limit: "system maximum", requested: "\(value)")
     case .resourceLimitTooLow(let resource, let value):
-      return
-        "Resource limit too low for \(resource): \(value). Minimum: cpus=1, memory=1MB, max_processes=1"
+      return ErrorMessages.resourceLimitExceeded(resource: resource, limit: "minimum (1)", requested: "\(value)")
     case .insecureMountConfiguration(let reason):
-      return "Insecure mount configuration: \(reason)"
+      return ErrorMessages.invalidPathInPolicy(path: "(mount)", reason: "Security violation: \(reason)")
     case .rootfsNotFound(let path):
-      return """
-        Rootfs image not found: \(path)
-
-        Available rootfs images should be in ~/.hops/rootfs/ directory.
-        Example: ~/.hops/rootfs/alpine.ext4, ~/.hops/rootfs/ubuntu.ext4
-
-        Or use absolute/tilde paths in the policy rootfs field.
-        """
+      return ErrorMessages.missingRuntimeFiles(missing: [path])
     }
   }
 }
