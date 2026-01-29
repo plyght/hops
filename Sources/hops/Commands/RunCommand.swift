@@ -86,7 +86,7 @@ struct RunCommand: AsyncParsableCommand {
     let allocateTty = interactive && isStdinTTY()
 
     if verbose {
-      print("Hops: Preparing sandbox environment...")
+      ColoredOutput.print("Hops: Preparing sandbox environment...", color: .cyan, style: .bold)
       print("  Root: \(sandboxPath)")
       if let profile = profile {
         print("  Profile: \(profile)")

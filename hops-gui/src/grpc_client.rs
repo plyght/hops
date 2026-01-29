@@ -81,6 +81,8 @@ impl GrpcClient {
             inline_policy: Some(proto_policy),
             environment: std::collections::HashMap::new(),
             working_directory: working_dir,
+            keep: false,
+            allocate_tty: false,
         });
 
         let response = self

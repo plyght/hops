@@ -43,7 +43,7 @@ extension SystemCommand {
 
     func run() async throws {
       if try await isDaemonRunning() {
-        print("Hops daemon is already running.")
+        ColoredOutput.info("Hops daemon is already running.")
         print("Use 'hops system status' for details.")
         return
       }
@@ -55,30 +55,37 @@ extension SystemCommand {
       }
 
       if foreground {
-        print("Starting Hops daemon in foreground mode...")
+        ColoredOutput.info("Starting Hops daemon in foreground mode...")
         print("Press Ctrl+C to stop.")
         print()
         try await launchDaemonForeground()
       } else {
-        print("Starting Hops daemon...")
-        try await launchDaemonBackground()
+        let spinner = Spinner(message: "Starting Hops daemon...")
+        spinner.start()
+        
+        do {
+          try await launchDaemonBackground()
+          try await Task.sleep(nanoseconds: 500_000_000)
 
-        try await Task.sleep(nanoseconds: 500_000_000)
-
-        if try await isDaemonRunning() {
-          print("Hops daemon started successfully.")
-          print()
-          let status = try await getDaemonStatus()
-          printStatus(status)
-          
-          if isFirstTime {
+          if try await isDaemonRunning() {
+            spinner.stop(success: true, completionMessage: "Hops daemon started successfully.")
             print()
-            print("Next steps:")
-            print("  1. Check system health: hops doctor")
-            print("  2. Run a test command: hops run /tmp -- echo \"Hello!\"")
+            let status = try await getDaemonStatus()
+            printStatus(status)
+            
+            if isFirstTime {
+              print()
+              ColoredOutput.print("Next steps:", color: .cyan, style: .bold)
+              print("  1. Check system health: hops doctor")
+              print("  2. Run a test command: hops run /tmp -- echo \"Hello!\"")
+            }
+          } else {
+            spinner.stop(success: false, completionMessage: "Failed to start daemon.")
+            throw ValidationError(ErrorMessages.daemonStartupFailed(logPath: "~/.hops/logs/hopsd.log"))
           }
-        } else {
-          throw ValidationError(ErrorMessages.daemonStartupFailed(logPath: "~/.hops/logs/hopsd.log"))
+        } catch {
+          spinner.stop(success: false, completionMessage: "Error starting daemon.")
+          throw error
         }
       }
     }
@@ -165,29 +172,31 @@ extension SystemCommand {
 
     func run() async throws {
       guard try await isDaemonRunning() else {
-        print("Hops daemon is not running.")
+        ColoredOutput.warning("Hops daemon is not running.")
         return
       }
 
-      print("Stopping Hops daemon...")
+      let spinner = Spinner(message: "Stopping Hops daemon...")
+      spinner.start()
 
       try await sendDaemonShutdown()
 
       for _ in 0..<10 {
         try await Task.sleep(nanoseconds: 500_000_000)
         if try await !isDaemonRunning() {
-          print("Hops daemon stopped successfully.")
+          spinner.stop(success: true, completionMessage: "Hops daemon stopped successfully.")
           return
         }
       }
 
       if force {
-        print("Graceful shutdown timed out. Force killing daemon...")
+        spinner.stop(success: false, completionMessage: "Graceful shutdown timed out.")
+        ColoredOutput.warning("Force killing daemon...")
         try await forceKillDaemon()
-        print("Hops daemon killed.")
+        ColoredOutput.success("Hops daemon killed.")
       } else {
-        print("Warning: Daemon did not stop gracefully.")
-        print("Use --force to force kill the daemon.")
+        spinner.stop(success: false, completionMessage: "Daemon did not stop gracefully.")
+        ColoredOutput.warning("Use --force to force kill the daemon.")
       }
     }
 
@@ -231,14 +240,15 @@ extension SystemCommand {
 
     func run() async throws {
       if try await isDaemonRunning() {
-        print("Hops daemon: running")
+        ColoredOutput.print("Hops daemon: ", terminator: "", color: .white, style: .bold)
+        ColoredOutput.print("running", color: .green, style: .bold)
 
         let status = try await getDaemonStatus()
         printStatus(status)
 
         if verbose {
           print()
-          print("Detailed Information:")
+          ColoredOutput.print("Detailed Information:", color: .white, style: .bold)
           print("  PID: \(status.pid)")
           print("  Socket: \(status.socketPath)")
           print("  Log: \(status.logPath)")
@@ -246,7 +256,8 @@ extension SystemCommand {
           print("  Total executions: \(status.totalExecutions)")
         }
       } else {
-        print("Hops daemon: not running")
+        ColoredOutput.print("Hops daemon: ", terminator: "", color: .white, style: .bold)
+        ColoredOutput.print("not running", color: .red, style: .bold)
         print()
         print("Start the daemon with: hops system start")
       }
@@ -286,14 +297,14 @@ extension SystemCommand {
 
     func run() async throws {
       if try await isDaemonRunning() {
-        print("Stopping Hops daemon...")
+        ColoredOutput.info("Stopping Hops daemon...")
         let stopCmd = StopDaemon()
         try await stopCmd.run()
 
         try await Task.sleep(nanoseconds: 1_000_000_000)
       }
 
-      print("Starting Hops daemon...")
+      ColoredOutput.info("Starting Hops daemon...")
       let startCmd = StartDaemon()
       try await startCmd.run()
     }

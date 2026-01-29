@@ -39,26 +39,75 @@ extension ProfileCommand {
       let profiles = try manager.listProfiles()
 
       if profiles.isEmpty {
-        print("No profiles found.")
+        ColoredOutput.info("No profiles found.")
         print("Create your first profile with: hops profile create <name>")
         return
       }
 
-      print("Available profiles:")
-      for profile in profiles {
-        let modDate = try? profile.path.resourceValues(forKeys: [.contentModificationDateKey])
-          .contentModificationDate
+      ColoredOutput.print("Available Profiles", color: .cyan, style: .bold)
+      print()
+      
+      let nameWidth = 20
+      let networkWidth = 12
+      let cpuWidth = 8
+      let memoryWidth = 12
+      
+      let header = String(format: "%-\(nameWidth)s %-\(networkWidth)s %-\(cpuWidth)s %-\(memoryWidth)s", "NAME", "NETWORK", "CPUS", "MEMORY")
+      ColoredOutput.print(header, color: .white, style: .bold)
+      print(String(repeating: "-", count: nameWidth + networkWidth + cpuWidth + memoryWidth + 3))
 
-        if let date = modDate {
-          let formatter = DateFormatter()
-          formatter.dateStyle = .medium
-          formatter.timeStyle = .short
-          print(
-            "  \(profile.name) (\(profile.location.rawValue), modified: \(formatter.string(from: date)))"
-          )
-        } else {
-          print("  \(profile.name) (\(profile.location.rawValue))")
+      for profileInfo in profiles {
+        guard let policy = try? manager.loadProfile(named: profileInfo.name) else {
+          continue
         }
+        
+        let networkColor: Color
+        let networkStr: String
+        switch policy.capabilities.network {
+        case .disabled:
+          networkColor = .red
+          networkStr = "disabled"
+        case .loopback:
+          networkColor = .yellow
+          networkStr = "loopback"
+        case .outbound:
+          networkColor = .cyan
+          networkStr = "outbound"
+        case .full:
+          networkColor = .green
+          networkStr = "full"
+        }
+        
+        let cpuStr = policy.resources?.cpus.map { "\($0)" } ?? "∞"
+        let memStr = policy.resources?.memoryBytes.map { formatBytes($0) } ?? "∞"
+        
+        let namePart = String(format: "%-\(nameWidth)s", profileInfo.name)
+        let cpuPart = String(format: "%-\(cpuWidth)s", cpuStr)
+        let memPart = String(format: "%-\(memoryWidth)s", memStr)
+        
+        print(namePart, terminator: " ")
+        print(ColoredOutput.format(String(format: "%-\(networkWidth)s", networkStr), color: networkColor), terminator: " ")
+        print(cpuPart, terminator: " ")
+        print(memPart)
+      }
+      
+      print()
+      ColoredOutput.info("Use 'hops profile show <name>' for detailed configuration")
+    }
+    
+    private func formatBytes(_ bytes: UInt64) -> String {
+      let kb = Double(bytes) / 1024.0
+      let mb = kb / 1024.0
+      let gb = mb / 1024.0
+
+      if gb >= 1.0 {
+        return String(format: "%.1fG", gb)
+      } else if mb >= 1.0 {
+        return String(format: "%.0fM", mb)
+      } else if kb >= 1.0 {
+        return String(format: "%.0fK", kb)
+      } else {
+        return "\(bytes)B"
       }
     }
   }
@@ -90,39 +139,61 @@ extension ProfileCommand {
         print(contents)
       } else {
         let policy = try manager.loadProfile(named: name)
-        print("Profile: \(name)")
+        ColoredOutput.print("Profile: \(name)", color: .cyan, style: .bold)
         print("Location: \(profileInfo.location.rawValue)")
         print("Path: \(profileInfo.path.path)")
         print()
-        print("Name: \(policy.name)")
-        print("Version: \(policy.version)")
+        
+        ColoredOutput.print("METADATA", color: .white, style: .bold)
+        print("  Name: \(policy.name)")
+        print("  Version: \(policy.version)")
         if let description = policy.description {
-          print("Description: \(description)")
+          print("  Description: \(description)")
         }
         if let rootfs = policy.rootfs {
-          print("Rootfs: \(rootfs)")
+          print("  Rootfs: \(rootfs)")
         }
         if let ociImage = policy.ociImage {
-          print("OCI Image: \(ociImage)")
+          print("  OCI Image: \(ociImage)")
         }
         print()
-        print("Network: \(policy.capabilities.network)")
+        
+        ColoredOutput.print("CAPABILITIES", color: .white, style: .bold)
+        
+        let networkColor: Color
+        switch policy.capabilities.network {
+        case .disabled: networkColor = .red
+        case .loopback: networkColor = .yellow
+        case .outbound: networkColor = .green
+        case .full: networkColor = .magenta
+        }
+        
+        print("  Network: ", terminator: "")
+        ColoredOutput.print("\(policy.capabilities.network)", color: networkColor)
+        
         print(
-          "Filesystem: \(policy.capabilities.filesystem.map { $0.rawValue }.sorted().joined(separator: ", "))"
+          "  Filesystem: \(policy.capabilities.filesystem.map { $0.rawValue }.sorted().joined(separator: ", "))"
         )
         if !policy.capabilities.allowedPaths.isEmpty {
-          print(
-            "Allowed paths: \(policy.capabilities.allowedPaths.sorted().joined(separator: ", "))")
+          print("  Allowed paths:")
+          for path in policy.capabilities.allowedPaths.sorted() {
+             print("    • \(path)")
+          }
         }
         if !policy.capabilities.deniedPaths.isEmpty {
-          print("Denied paths: \(policy.capabilities.deniedPaths.sorted().joined(separator: ", "))")
+          print("  Denied paths:")
+          for path in policy.capabilities.deniedPaths.sorted() {
+             ColoredOutput.print("    • \(path)", color: .red)
+          }
         }
         print()
+        
         let limits = policy.capabilities.resourceLimits
         if limits.cpus != nil || limits.memoryBytes != nil || limits.maxProcesses != nil {
-          print("Resource Limits:")
+          ColoredOutput.print("RESOURCE LIMITS", color: .white, style: .bold)
           if let cpus = limits.cpus {
-            print("  CPUs: \(cpus)")
+            let bar = String(repeating: "█", count: Int(cpus)) + String(repeating: "░", count: 16 - Int(cpus))
+            print("  CPUs: \(bar) \(cpus)/16")
           }
           if let memory = limits.memoryBytes {
             print("  Memory: \(formatBytes(memory))")
@@ -130,9 +201,10 @@ extension ProfileCommand {
           if let maxProcs = limits.maxProcesses {
             print("  Max Processes: \(maxProcs)")
           }
+          print()
         }
-        print()
-        print("Sandbox:")
+        
+        ColoredOutput.print("SANDBOX CONFIG", color: .white, style: .bold)
         print("  Root: \(policy.sandbox.rootPath)")
         print("  Working Directory: \(policy.sandbox.workingDirectory)")
         if let hostname = policy.sandbox.hostname {
@@ -184,6 +256,9 @@ extension ProfileCommand {
     @Option(name: .long, help: "Template to use: default, restrictive, build, network-only")
     var template: String?
 
+    @Flag(name: .long, help: "Create profile interactively with guided prompts")
+    var interactive: Bool = false
+
     @Flag(name: .long, help: "Overwrite if profile already exists")
     var force: Bool = false
 
@@ -197,17 +272,154 @@ extension ProfileCommand {
         throw ValidationError("Profile '\(name)' already exists. Use --force to overwrite.")
       }
 
-      let toml = templateToml(template ?? "default", name: name)
+      let toml: String
+      if interactive {
+        toml = try interactiveProfileCreation(name: name)
+      } else {
+        toml = templateToml(template ?? "default", name: name)
+      }
 
       try toml.write(to: profilePath, atomically: true, encoding: .utf8)
 
-      print("Created profile '\(name)' at \(profilePath.path)")
+      ColoredOutput.success("Created profile '\(name)' at \(profilePath.path)")
       print()
       print("Edit the profile:")
       print("  $EDITOR \(profilePath.path)")
       print()
       print("Use the profile:")
       print("  hops run --profile \(name) ./project -- command")
+    }
+    
+    private func interactiveProfileCreation(name: String) throws -> String {
+      ColoredOutput.print("=== Interactive Profile Creation ===", color: .cyan, style: .bold)
+      print()
+      
+      ColoredOutput.print("Profile Name:", color: .white, style: .bold)
+      print("  \(name)")
+      print()
+      
+      let description = prompt("Description", defaultValue: "Custom profile")
+      print()
+      
+      ColoredOutput.print("Network Access:", color: .white, style: .bold)
+      print("  1. disabled  - No network access")
+      print("  2. loopback  - Only localhost connections")
+      print("  3. outbound  - Outbound connections allowed")
+      print("  4. full      - Full network access")
+      let networkChoice = prompt("Choose (1-4)", defaultValue: "1")
+      let networkIndex = (Int(networkChoice) ?? 1) - 1
+      let network = ["disabled", "loopback", "outbound", "full"][max(0, min(3, networkIndex))]
+      print()
+      
+      ColoredOutput.print("Filesystem Permissions:", color: .white, style: .bold)
+      let fsRead = promptYesNo("Allow read access?", defaultValue: true)
+      let fsWrite = promptYesNo("Allow write access?", defaultValue: false)
+      let fsExec = promptYesNo("Allow execute access?", defaultValue: true)
+      print()
+      
+      var fsPerms: [String] = []
+      if fsRead { fsPerms.append("\"read\"") }
+      if fsWrite { fsPerms.append("\"write\"") }
+      if fsExec { fsPerms.append("\"execute\"") }
+      
+      ColoredOutput.print("Resource Limits:", color: .white, style: .bold)
+      let cpus = prompt("CPU cores (leave empty for unlimited)", defaultValue: "")
+      let memory = prompt("Memory (e.g., 512M, 2G, leave empty for unlimited)", defaultValue: "")
+      let maxProcs = prompt("Max processes (leave empty for unlimited)", defaultValue: "")
+      print()
+      
+      var resourcesSection = ""
+      if !cpus.isEmpty || !memory.isEmpty || !maxProcs.isEmpty {
+        resourcesSection = "\n[capabilities.resource_limits]"
+        if !cpus.isEmpty, let cpuValue = UInt32(cpus) {
+          resourcesSection += "\ncpus = \(cpuValue)"
+        }
+        if !memory.isEmpty {
+          if let memBytes = parseMemoryString(memory) {
+            resourcesSection += "\nmemory_bytes = \(memBytes)"
+          }
+        }
+        if !maxProcs.isEmpty, let maxValue = UInt32(maxProcs) {
+          resourcesSection += "\nmax_processes = \(maxValue)"
+        }
+      }
+      
+      ColoredOutput.success("Profile configuration complete!")
+      print()
+      
+      return """
+        name = "\(name)"
+        version = "1.0.0"
+        description = "\(description)"
+        rootfs = "alpine-rootfs.ext4"
+        
+        [capabilities]
+        network = "\(network)"
+        filesystem = [\(fsPerms.joined(separator: ", "))]
+        allowed_paths = []
+        denied_paths = []\(resourcesSection)
+        
+        [sandbox]
+        root_path = "/"
+        hostname = "\(name)-sandbox"
+        working_directory = "/"
+        
+        [[sandbox.mounts]]
+        source = "tmpfs"
+        destination = "/tmp"
+        type = "tmpfs"
+        mode = "rw"
+        """
+    }
+    
+    private func prompt(_ message: String, defaultValue: String) -> String {
+      if !defaultValue.isEmpty {
+        print("\(message) [\(defaultValue)]: ", terminator: "")
+      } else {
+        print("\(message): ", terminator: "")
+      }
+      fflush(stdout)
+      
+      guard let input = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        return defaultValue
+      }
+      
+      return input.isEmpty ? defaultValue : input
+    }
+    
+    private func promptYesNo(_ message: String, defaultValue: Bool) -> Bool {
+      let defaultStr = defaultValue ? "Y/n" : "y/N"
+      print("\(message) [\(defaultStr)]: ", terminator: "")
+      fflush(stdout)
+      
+      guard let input = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+        return defaultValue
+      }
+      
+      if input.isEmpty {
+        return defaultValue
+      }
+      
+      return input == "y" || input == "yes"
+    }
+    
+    private func parseMemoryString(_ str: String) -> UInt64? {
+      let cleaned = str.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+      let numberStr = cleaned.trimmingCharacters(in: CharacterSet.decimalDigits.inverted)
+      
+      guard let value = Double(numberStr) else {
+        return nil
+      }
+      
+      if cleaned.hasSuffix("G") || cleaned.hasSuffix("GB") {
+        return UInt64(value * 1024 * 1024 * 1024)
+      } else if cleaned.hasSuffix("M") || cleaned.hasSuffix("MB") {
+        return UInt64(value * 1024 * 1024)
+      } else if cleaned.hasSuffix("K") || cleaned.hasSuffix("KB") {
+        return UInt64(value * 1024)
+      } else {
+        return UInt64(value)
+      }
     }
 
     private func profileDirectory() -> URL {

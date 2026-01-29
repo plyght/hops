@@ -20,6 +20,8 @@ pub struct HopsGui {
     pub grpc_client: Option<GrpcClient>,
     pub daemon_status: DaemonStatus,
     pub loading_state: LoadingState,
+    pub memory_unit: MemoryUnit,
+    pub memory_display_value: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,6 +72,54 @@ pub enum PathType {
     Denied,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MemoryUnit {
+    Bytes,
+    KB,
+    MB,
+    GB,
+}
+
+impl MemoryUnit {
+    pub fn all() -> Vec<MemoryUnit> {
+        vec![
+            MemoryUnit::Bytes,
+            MemoryUnit::KB,
+            MemoryUnit::MB,
+            MemoryUnit::GB,
+        ]
+    }
+
+    pub fn to_bytes(&self, value: f64) -> u64 {
+        match self {
+            MemoryUnit::Bytes => value as u64,
+            MemoryUnit::KB => (value * 1024.0) as u64,
+            MemoryUnit::MB => (value * 1024.0 * 1024.0) as u64,
+            MemoryUnit::GB => (value * 1024.0 * 1024.0 * 1024.0) as u64,
+        }
+    }
+
+    pub fn from_bytes(&self, bytes: u64) -> f64 {
+        match self {
+            MemoryUnit::Bytes => bytes as f64,
+            MemoryUnit::KB => bytes as f64 / 1024.0,
+            MemoryUnit::MB => bytes as f64 / (1024.0 * 1024.0),
+            MemoryUnit::GB => bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoryUnit::Bytes => write!(f, "Bytes"),
+            MemoryUnit::KB => write!(f, "KB"),
+            MemoryUnit::MB => write!(f, "MB"),
+            MemoryUnit::GB => write!(f, "GB"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Message {
     ProfilesLoaded(Vec<Policy>),
@@ -84,6 +134,7 @@ pub enum Message {
     RemovePath { path_type: PathType, index: usize },
     CpuChanged(f32),
     MemoryBytesChanged(String),
+    MemoryUnitChanged(MemoryUnit),
     MaxProcessesChanged(String),
     NameChanged(String),
     SaveProfile,
@@ -120,6 +171,7 @@ impl Clone for Message {
             },
             Message::CpuChanged(f) => Message::CpuChanged(*f),
             Message::MemoryBytesChanged(s) => Message::MemoryBytesChanged(s.clone()),
+            Message::MemoryUnitChanged(u) => Message::MemoryUnitChanged(*u),
             Message::MaxProcessesChanged(s) => Message::MaxProcessesChanged(s.clone()),
             Message::NameChanged(s) => Message::NameChanged(s.clone()),
             Message::SaveProfile => Message::SaveProfile,
@@ -155,6 +207,8 @@ impl HopsGui {
                 grpc_client: None,
                 daemon_status: DaemonStatus::Unknown,
                 loading_state: LoadingState::Idle,
+                memory_unit: MemoryUnit::MB,
+                memory_display_value: String::new(),
             },
             Task::perform(
                 async {
@@ -182,6 +236,13 @@ impl HopsGui {
                 self.view_mode = ViewMode::ProfileEditor;
                 self.path_inputs = PathInputs::default();
                 self.validation_errors = ValidationErrors::default();
+                if let Some(profile) = self.profiles.get(index) {
+                    if let Some(bytes) = profile.capabilities.resource_limits.memory_bytes {
+                        self.memory_display_value = self.memory_unit.from_bytes(bytes).to_string();
+                    } else {
+                        self.memory_display_value = String::new();
+                    }
+                }
             }
             Message::CreateNewProfile => {
                 let mut new_policy = Policy::default();
@@ -191,6 +252,7 @@ impl HopsGui {
                 self.view_mode = ViewMode::ProfileEditor;
                 self.path_inputs = PathInputs::default();
                 self.validation_errors = ValidationErrors::default();
+                self.memory_display_value = String::new();
             }
             Message::DeleteProfile(index) => {
                 if index < self.profiles.len() {
@@ -291,16 +353,31 @@ impl HopsGui {
                 }
             }
             Message::MemoryBytesChanged(value) => {
+                self.memory_display_value = value.clone();
                 if let Some(idx) = self.selected_profile {
                     if let Some(profile) = self.profiles.get_mut(idx) {
-                        if let Ok(bytes) = value.parse::<u64>() {
+                        if let Ok(numeric_value) = value.parse::<f64>() {
+                            let bytes = self.memory_unit.to_bytes(numeric_value);
                             profile.capabilities.resource_limits.memory_bytes = Some(bytes);
+                            self.validation_errors.fields.remove("memory_bytes");
+                        } else if value.is_empty() {
+                            profile.capabilities.resource_limits.memory_bytes = None;
                             self.validation_errors.fields.remove("memory_bytes");
                         } else {
                             self.validation_errors.fields.insert(
                                 "memory_bytes".to_string(),
-                                "Must be a number (bytes)".to_string(),
+                                "Must be a number".to_string(),
                             );
+                        }
+                    }
+                }
+            }
+            Message::MemoryUnitChanged(unit) => {
+                self.memory_unit = unit;
+                if let Some(idx) = self.selected_profile {
+                    if let Some(profile) = self.profiles.get(idx) {
+                        if let Some(bytes) = profile.capabilities.resource_limits.memory_bytes {
+                            self.memory_display_value = unit.from_bytes(bytes).to_string();
                         }
                     }
                 }
@@ -467,7 +544,13 @@ impl HopsGui {
             ViewMode::ProfileEditor => {
                 if let Some(idx) = self.selected_profile {
                     if let Some(profile) = self.profiles.get(idx) {
-                        profile_editor::view(profile, &self.path_inputs, &self.validation_errors)
+                        profile_editor::view(
+                            profile,
+                            &self.path_inputs,
+                            &self.validation_errors,
+                            &self.memory_unit,
+                            &self.memory_display_value,
+                        )
                     } else {
                         profile_list::view(&self.profiles)
                     }
@@ -507,13 +590,73 @@ impl HopsGui {
             }),
         };
 
-        let profiles_btn = button(text("Profiles"))
+        let profiles_btn = button(text("📋 Profiles"))
             .on_press(Message::SwitchView(ViewMode::ProfileList))
-            .width(Length::Fill);
+            .width(Length::Fill)
+            .padding(12)
+            .style(move |_theme, status| {
+                let is_active = self.view_mode == ViewMode::ProfileList;
+                let base_color = if is_active {
+                    iced::Color::from_rgb(0.25, 0.45, 0.65)
+                } else {
+                    iced::Color::from_rgb(0.18, 0.18, 0.2)
+                };
+                let hover_color = if is_active {
+                    iced::Color::from_rgb(0.3, 0.5, 0.7)
+                } else {
+                    iced::Color::from_rgb(0.22, 0.22, 0.25)
+                };
+                iced::widget::button::Style {
+                    background: Some(iced::Background::Color(
+                        if matches!(status, iced::widget::button::Status::Hovered) {
+                            hover_color
+                        } else {
+                            base_color
+                        }
+                    )),
+                    text_color: iced::Color::WHITE,
+                    border: iced::Border {
+                        color: iced::Color::from_rgb(0.35, 0.35, 0.4),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            });
 
-        let history_btn = button(text("Run History"))
+        let history_btn = button(text("📜 Run History"))
             .on_press(Message::SwitchView(ViewMode::RunHistory))
-            .width(Length::Fill);
+            .width(Length::Fill)
+            .padding(12)
+            .style(move |_theme, status| {
+                let is_active = self.view_mode == ViewMode::RunHistory;
+                let base_color = if is_active {
+                    iced::Color::from_rgb(0.25, 0.45, 0.65)
+                } else {
+                    iced::Color::from_rgb(0.18, 0.18, 0.2)
+                };
+                let hover_color = if is_active {
+                    iced::Color::from_rgb(0.3, 0.5, 0.7)
+                } else {
+                    iced::Color::from_rgb(0.22, 0.22, 0.25)
+                };
+                iced::widget::button::Style {
+                    background: Some(iced::Background::Color(
+                        if matches!(status, iced::widget::button::Status::Hovered) {
+                            hover_color
+                        } else {
+                            base_color
+                        }
+                    )),
+                    text_color: iced::Color::WHITE,
+                    border: iced::Border {
+                        color: iced::Color::from_rgb(0.35, 0.35, 0.4),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            });
 
         let sidebar_content = column![title, status_text, profiles_btn, history_btn]
             .spacing(15)

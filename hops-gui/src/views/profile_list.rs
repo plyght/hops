@@ -1,6 +1,6 @@
 use crate::app::Message;
 use crate::models::policy::Policy;
-use iced::widget::{button, column, container, row, scrollable, text, Column};
+use iced::widget::{button, column, container, row, scrollable, text, tooltip, Column};
 use iced::{Border, Color, Element, Length};
 
 pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
@@ -42,6 +42,23 @@ pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
                 .size(12)
                 .color(Color::from_rgb(0.6, 0.6, 0.6));
 
+                let memory_display = profile
+                    .capabilities
+                    .resource_limits
+                    .memory_bytes
+                    .map(|m| {
+                        let gb = m as f64 / (1024.0 * 1024.0 * 1024.0);
+                        let mb = m as f64 / (1024.0 * 1024.0);
+                        if gb >= 1.0 {
+                            format!("{:.1} GB", gb)
+                        } else if mb >= 1.0 {
+                            format!("{:.0} MB", mb)
+                        } else {
+                            format!("{} bytes", m)
+                        }
+                    })
+                    .unwrap_or_else(|| "unlimited".to_string());
+
                 let resources_summary = text(format!(
                     "Resources: {} CPUs, {} memory, {} max processes",
                     profile
@@ -50,12 +67,7 @@ pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
                         .cpus
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "unlimited".to_string()),
-                    profile
-                        .capabilities
-                        .resource_limits
-                        .memory_bytes
-                        .map(|m| format!("{} bytes", m))
-                        .unwrap_or_else(|| "unlimited".to_string()),
+                    memory_display,
                     profile
                         .capabilities
                         .resource_limits
@@ -73,39 +85,106 @@ pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
                     paths_summary,
                     resources_summary,
                 ]
-                .spacing(4)
+                .spacing(6)
                 .width(Length::Fill);
 
-                let edit_btn = button(text("Edit").size(14))
+                let edit_btn = button(text("✏ Edit").size(14))
                     .on_press(Message::ProfileSelected(idx))
-                    .padding(8)
-                    .style(|_theme, _status| button::Style {
-                        background: Some(iced::Background::Color(Color::from_rgb(0.2, 0.5, 0.8))),
-                        text_color: Color::WHITE,
-                        border: Border {
-                            color: Color::from_rgb(0.3, 0.6, 0.9),
-                            width: 1.0,
-                            radius: 2.0.into(),
-                        },
-                        ..Default::default()
+                    .padding(10)
+                    .style(|_theme, status| {
+                        let base_color = Color::from_rgb(0.2, 0.5, 0.8);
+                        let hover_color = Color::from_rgb(0.25, 0.55, 0.85);
+                        button::Style {
+                            background: Some(iced::Background::Color(
+                                if matches!(status, button::Status::Hovered) {
+                                    hover_color
+                                } else {
+                                    base_color
+                                },
+                            )),
+                            text_color: Color::WHITE,
+                            border: Border {
+                                color: Color::from_rgb(0.3, 0.6, 0.9),
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            shadow: if matches!(status, button::Status::Hovered) {
+                                iced::Shadow {
+                                    color: Color::from_rgba(0.2, 0.5, 0.8, 0.4),
+                                    offset: iced::Vector::new(0.0, 2.0),
+                                    blur_radius: 8.0,
+                                }
+                            } else {
+                                iced::Shadow::default()
+                            },
+                            ..Default::default()
+                        }
                     });
 
-                let duplicate_btn = button(text("Duplicate").size(14))
+                let duplicate_btn = button(text("⎘ Duplicate").size(14))
                     .on_press(Message::DuplicateProfile(idx))
-                    .padding(8);
+                    .padding(10)
+                    .style(|_theme, status| {
+                        let base_color = Color::from_rgb(0.4, 0.4, 0.45);
+                        let hover_color = Color::from_rgb(0.45, 0.45, 0.5);
+                        button::Style {
+                            background: Some(iced::Background::Color(
+                                if matches!(status, button::Status::Hovered) {
+                                    hover_color
+                                } else {
+                                    base_color
+                                },
+                            )),
+                            text_color: Color::WHITE,
+                            border: Border {
+                                color: Color::from_rgb(0.5, 0.5, 0.55),
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            shadow: if matches!(status, button::Status::Hovered) {
+                                iced::Shadow {
+                                    color: Color::from_rgba(0.4, 0.4, 0.45, 0.4),
+                                    offset: iced::Vector::new(0.0, 2.0),
+                                    blur_radius: 8.0,
+                                }
+                            } else {
+                                iced::Shadow::default()
+                            },
+                            ..Default::default()
+                        }
+                    });
 
-                let delete_btn = button(text("Delete").size(14))
+                let delete_btn = button(text("🗑 Delete").size(14))
                     .on_press(Message::DeleteProfile(idx))
-                    .padding(8)
-                    .style(|_theme, _status| button::Style {
-                        background: Some(iced::Background::Color(Color::from_rgb(0.8, 0.2, 0.2))),
-                        text_color: Color::WHITE,
-                        border: Border {
-                            color: Color::from_rgb(0.9, 0.3, 0.3),
-                            width: 1.0,
-                            radius: 2.0.into(),
-                        },
-                        ..Default::default()
+                    .padding(10)
+                    .style(|_theme, status| {
+                        let base_color = Color::from_rgb(0.8, 0.2, 0.2);
+                        let hover_color = Color::from_rgb(0.85, 0.25, 0.25);
+                        button::Style {
+                            background: Some(iced::Background::Color(
+                                if matches!(status, button::Status::Hovered) {
+                                    hover_color
+                                } else {
+                                    base_color
+                                },
+                            )),
+                            text_color: Color::WHITE,
+                            border: Border {
+                                color: Color::from_rgb(0.9, 0.3, 0.3),
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            shadow: if matches!(status, button::Status::Hovered) {
+                                iced::Shadow {
+                                    color: Color::from_rgba(0.8, 0.2, 0.2, 0.4),
+                                    offset: iced::Vector::new(0.0, 2.0),
+                                    blur_radius: 8.0,
+                                }
+                            } else {
+                                iced::Shadow::default()
+                            },
+                            ..Default::default()
+                        }
                     });
 
                 let button_row = row![edit_btn, duplicate_btn, delete_btn].spacing(10);
@@ -113,15 +192,20 @@ pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
                 let profile_card = container(
                     column![row![info_column, button_row].spacing(15)]
                         .spacing(10)
-                        .padding(15),
+                        .padding(20),
                 )
                 .width(Length::Fill)
                 .style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(Color::from_rgb(0.15, 0.15, 0.15))),
+                    background: Some(iced::Background::Color(Color::from_rgb(0.16, 0.16, 0.18))),
                     border: Border {
-                        color: Color::from_rgb(0.3, 0.3, 0.3),
+                        color: Color::from_rgb(0.35, 0.35, 0.4),
                         width: 1.0,
-                        radius: 2.0.into(),
+                        radius: 8.0.into(),
+                    },
+                    shadow: iced::Shadow {
+                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+                        offset: iced::Vector::new(0.0, 4.0),
+                        blur_radius: 12.0,
                     },
                     ..Default::default()
                 });
@@ -129,24 +213,53 @@ pub fn view<'a>(profiles: &'a [Policy]) -> Element<'a, Message> {
                 col.push(profile_card)
             });
 
-    let new_profile_btn = button(
-        text("+ CREATE NEW PROFILE")
-            .width(Length::Fill)
-            .align_x(iced::alignment::Horizontal::Center),
-    )
-    .on_press(Message::CreateNewProfile)
-    .width(Length::Fill)
-    .padding(15)
-    .style(|_theme, _status| button::Style {
-        background: Some(iced::Background::Color(Color::from_rgb(0.2, 0.6, 0.2))),
-        text_color: Color::WHITE,
-        border: Border {
-            color: Color::from_rgb(0.3, 0.7, 0.3),
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..Default::default()
-    });
+    let shortcut_hint = if cfg!(target_os = "macos") {
+        "Create new profile (⌘N)"
+    } else {
+        "Create new profile (Ctrl+N)"
+    };
+
+    let new_profile_btn = tooltip(
+        button(
+            text("➕ CREATE NEW PROFILE")
+                .width(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Center),
+        )
+        .on_press(Message::CreateNewProfile)
+        .width(Length::Fill)
+        .padding(16)
+        .style(|_theme, status| {
+            let base_color = Color::from_rgb(0.2, 0.6, 0.2);
+            let hover_color = Color::from_rgb(0.25, 0.65, 0.25);
+            button::Style {
+                background: Some(iced::Background::Color(
+                    if matches!(status, button::Status::Hovered) {
+                        hover_color
+                    } else {
+                        base_color
+                    },
+                )),
+                text_color: Color::WHITE,
+                border: Border {
+                    color: Color::from_rgb(0.3, 0.7, 0.3),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                shadow: if matches!(status, button::Status::Hovered) {
+                    iced::Shadow {
+                        color: Color::from_rgba(0.2, 0.6, 0.2, 0.4),
+                        offset: iced::Vector::new(0.0, 2.0),
+                        blur_radius: 10.0,
+                    }
+                } else {
+                    iced::Shadow::default()
+                },
+                ..Default::default()
+            }
+        }),
+        shortcut_hint,
+        tooltip::Position::Top,
+    );
 
     let empty_state = if profiles.is_empty() {
         column![
