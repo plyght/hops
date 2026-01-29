@@ -36,6 +36,7 @@ Download from [Apple Container releases](https://github.com/apple/container/rele
 - **Profile System**: Create, share, and reuse sandbox configurations across projects
 - **Secure Defaults**: Network disabled, minimal filesystem access, symlink attack prevention
 - **Interactive TTY Support**: Run interactive shells with full stdin/stdout/stderr support using `--interactive` or `-it` flag
+- **Automatic Daemon Management**: Daemon starts automatically when needed, no manual lifecycle management required
 - **Desktop GUI**: Iced-based Rust application for visual profile management and run history
 
 ## Quick Start
@@ -56,11 +57,18 @@ The installation script will:
 - Download runtime files (vmlinux, initfs)
 - Create Alpine rootfs image
 
-Then start the daemon and run your first command:
+Then run your first command:
 
 ```bash
-hops system start
 hops run /tmp -- /bin/echo "Hello from Hops!"
+```
+
+The daemon starts automatically when needed. To manage it manually:
+
+```bash
+hops system start   # Explicitly start daemon
+hops system status  # Check daemon status
+hops system stop    # Stop daemon
 ```
 
 ### Option 2: Manual Installation
@@ -75,7 +83,6 @@ sudo cp .build/release/hops /usr/local/bin/
 sudo cp .build/release/hopsd /usr/local/bin/
 sudo cp .build/release/hops-create-rootfs /usr/local/bin/
 hops init
-hops system start
 ```
 
 ### Option 3: Step-by-Step (Legacy)
@@ -111,13 +118,7 @@ curl -L -o alpine-minirootfs.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.19/
 hops-create-rootfs
 ```
 
-#### 4. Start Daemon
-
-```bash
-hops system start
-```
-
-#### 5. Run a Command
+#### 4. Run a Command
 
 ```bash
 hops run /tmp -- /bin/echo "Hello from Hops!"
@@ -150,7 +151,7 @@ hops init --check-only
 # Verify system health
 hops doctor
 
-# Run a command in sandbox
+# Run a command in sandbox (daemon starts automatically)
 hops run /tmp -- /bin/echo "Hello"
 
 # Run shell commands
@@ -176,11 +177,11 @@ hops run --cpus 2 --memory 512M /tmp -- /bin/ls
 hops run --network outbound /tmp -- /bin/ping -c 2 google.com
 hops run --network outbound /tmp -- /bin/wget -O- example.com
 
-# Check daemon status
-hops system status
-
-# Stop daemon
-hops system stop
+# Manual daemon management (optional - daemon auto-starts by default)
+hops system status        # Check daemon status
+hops system start         # Explicitly start daemon
+hops system stop          # Stop daemon
+hops system restart       # Restart daemon
 ```
 
 ### Profile Management
