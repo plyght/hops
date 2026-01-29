@@ -139,16 +139,19 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
     responseStream: GRPCAsyncResponseStreamWriter<Hops_OutputChunk>,
     context: GRPCAsyncServerCallContext
   ) async throws {
-    guard let firstChunk = try await requestStream.first(where: { $0.type == .run }) else {
-      return
-    }
-    guard firstChunk.hasRunRequest else {
-      return
-    }
-    let request = firstChunk.runRequest
     guard let manager = await sandboxManager else {
       throw ContainerServiceError.managerNotAvailable
     }
+
+    var requestIterator = requestStream.makeAsyncIterator()
+    
+    guard let firstChunk = try await requestIterator.next() else {
+      return
+    }
+    guard firstChunk.type == .run, firstChunk.hasRunRequest else {
+      return
+    }
+    let request = firstChunk.runRequest
 
     let sandboxId = UUID().uuidString
 
@@ -197,6 +200,25 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
       keep: request.keep,
       allocateTty: request.allocateTty
     )
+
+    Task {
+      for _ in 0..<10 {
+        if let stdinWriter = await manager.getStdinWriter(id: sandboxId) {
+          do {
+            while let inputChunk = try await requestIterator.next() {
+              if inputChunk.type == .stdin {
+                stdinWriter.write(inputChunk.data)
+              }
+            }
+            stdinWriter.finish()
+          } catch {
+            stdinWriter.finish()
+          }
+          break
+        }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+      }
+    }
 
     for try await chunk in stream {
       var protoChunk = Hops_OutputChunk()

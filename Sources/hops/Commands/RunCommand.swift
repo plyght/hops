@@ -24,6 +24,7 @@ struct RunCommand: AsyncParsableCommand {
         hops run --cpus 2 --max-processes 100 ./workdir -- cargo build --release
         hops run --image alpine:3.19 /tmp -- /bin/sh
         hops run --image ubuntu:22.04 --network outbound /tmp -- apt update
+        echo "ls -la" | hops run --no-interactive /tmp -- /bin/sh
       """
   )
 
@@ -60,6 +61,9 @@ struct RunCommand: AsyncParsableCommand {
   @Flag(name: .long, help: "Keep container directory after execution")
   var keep: Bool = false
 
+  @Flag(name: .long, inversion: .prefixedNo, help: "Allocate TTY for interactive sessions (automatic when using a terminal)")
+  var interactive: Bool = true
+
   @Argument(parsing: .remaining, help: "Command to execute inside the sandbox")
   var command: [String] = []
 
@@ -71,7 +75,7 @@ struct RunCommand: AsyncParsableCommand {
 
   mutating func run() async throws {
     let sandboxPath = expandPath(path)
-    let allocateTty = isStdinTTY()
+    let allocateTty = interactive && isStdinTTY()
 
     if verbose {
       print("Hops: Preparing sandbox environment...")
@@ -81,6 +85,7 @@ struct RunCommand: AsyncParsableCommand {
       }
       print("  Command: \(command.joined(separator: " "))")
       print("  TTY: \(allocateTty ? "enabled" : "disabled")")
+      print("  Interactive: \(interactive ? "enabled" : "disabled")")
     }
 
     let policy = try await loadPolicy()
@@ -183,7 +188,7 @@ struct RunCommand: AsyncParsableCommand {
     let client = try await DaemonClient.connect()
 
     var originalTermios: termios?
-    if allocateTty {
+    if allocateTty && isStdinTTY() {
       originalTermios = try setRawTerminalMode()
     }
 
@@ -377,7 +382,20 @@ struct DaemonClient {
     inputChunk.type = .run
     inputChunk.runRequest = runRequest
     try await call.requestStream.send(inputChunk)
-    call.requestStream.finish()
+
+    let shouldForwardStdin = allocateTty || isatty(STDIN_FILENO) == 0
+    
+    if shouldForwardStdin {
+      Task {
+        if allocateTty && isatty(STDIN_FILENO) != 0 {
+          await forwardStdinInteractive(to: call.requestStream)
+        } else {
+          await forwardStdinBuffered(to: call.requestStream)
+        }
+      }
+    } else {
+      call.requestStream.finish()
+    }
 
     let responseStream = call.responseStream
     var exitCode: Int32 = 1
@@ -394,10 +412,12 @@ struct DaemonClient {
         case .stdout:
           if !chunk.data.isEmpty {
             FileHandle.standardOutput.write(chunk.data)
+            try? FileHandle.standardOutput.synchronize()
           }
         case .stderr:
           if !chunk.data.isEmpty {
             FileHandle.standardError.write(chunk.data)
+            try? FileHandle.standardError.synchronize()
           }
         case .exit:
           if chunk.hasExitCode {
@@ -413,10 +433,12 @@ struct DaemonClient {
         case .stdout:
           if !chunk.data.isEmpty {
             FileHandle.standardOutput.write(chunk.data)
+            try? FileHandle.standardOutput.synchronize()
           }
         case .stderr:
           if !chunk.data.isEmpty {
             FileHandle.standardError.write(chunk.data)
+            try? FileHandle.standardError.synchronize()
           }
         case .exit:
           if chunk.hasExitCode {
@@ -431,6 +453,87 @@ struct DaemonClient {
     return exitCode
   }
 
+  private func forwardStdinInteractive(to requestStream: GRPCAsyncRequestStreamWriter<Hops_InputChunk>) async {
+    let stdinFD = STDIN_FILENO
+    
+    let flags = fcntl(stdinFD, F_GETFL)
+    _ = fcntl(stdinFD, F_SETFL, flags | O_NONBLOCK)
+    
+    defer {
+      _ = fcntl(stdinFD, F_SETFL, flags)
+    }
+    
+    var buffer = [UInt8](repeating: 0, count: 64)
+    
+    while true {
+      let bytesRead = read(stdinFD, &buffer, buffer.count)
+      
+      if bytesRead < 0 {
+        let error = errno
+        if error == EINTR {
+          continue
+        }
+        if error == EAGAIN || error == EWOULDBLOCK {
+          try? await Task.sleep(nanoseconds: 10_000_000)
+          continue
+        }
+        break
+      }
+      
+      if bytesRead == 0 {
+        break
+      }
+      
+      var chunk = Hops_InputChunk()
+      chunk.type = .stdin
+      chunk.data = Data(buffer[..<bytesRead])
+      
+      do {
+        try await requestStream.send(chunk)
+      } catch {
+        break
+      }
+    }
+    
+    requestStream.finish()
+  }
+  
+  private func forwardStdinBuffered(to requestStream: GRPCAsyncRequestStreamWriter<Hops_InputChunk>) async {
+    do {
+      let stdin = FileHandle.standardInput
+      var buffer = Data()
+      buffer.reserveCapacity(4096)
+      
+      for try await byte in stdin.bytes {
+        buffer.append(byte)
+        
+        if buffer.count >= 4096 {
+          var stdinChunk = Hops_InputChunk()
+          stdinChunk.type = .stdin
+          stdinChunk.data = buffer
+          
+          do {
+            try await requestStream.send(stdinChunk)
+            buffer.removeAll(keepingCapacity: true)
+          } catch {
+            break
+          }
+        }
+      }
+      
+      if !buffer.isEmpty {
+        var stdinChunk = Hops_InputChunk()
+        stdinChunk.type = .stdin
+        stdinChunk.data = buffer
+        try? await requestStream.send(stdinChunk)
+      }
+      
+      requestStream.finish()
+    } catch {
+      requestStream.finish()
+    }
+  }
+  
   private func setupWindowResizeHandler() -> DispatchSourceSignal? {
     let signalSource = DispatchSource.makeSignalSource(
       signal: SIGWINCH,

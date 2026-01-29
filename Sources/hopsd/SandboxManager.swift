@@ -21,6 +21,7 @@ actor SandboxManager {
   private var eventLoopGroup: MultiThreadedEventLoopGroup?
   private var containers: [String: LinuxContainer] = [:]
   private var containerInfo: [String: ContainerMetadata] = [:]
+  private var stdinWriters: [String: GRPCStdinReader] = [:]
   private let logger: Logger
   private weak var daemon: HopsDaemon?
 
@@ -31,6 +32,7 @@ actor SandboxManager {
     self.daemon = daemon
 
     try await initializeVMM()
+    cleanupStaleContainers()
   }
 
   private func initializeVMM() async throws {
@@ -97,23 +99,22 @@ actor SandboxManager {
     try? FileManager.default.createDirectory(at: containersDir, withIntermediateDirectories: true)
     try? FileManager.default.createDirectory(at: containerDir, withIntermediateDirectories: true)
 
-    let overlayUpperDir = containerDir.appendingPathComponent("upper")
-    let overlayWorkDir = containerDir.appendingPathComponent("work")
-
-    try? FileManager.default.createDirectory(at: overlayUpperDir, withIntermediateDirectories: true)
-    try? FileManager.default.createDirectory(at: overlayWorkDir, withIntermediateDirectories: true)
+    let containerRootfsPath = containerDir.appendingPathComponent("rootfs.ext4")
+    
+    try FileManager.default.copyItem(at: rootfs, to: containerRootfsPath)
 
     logger.info(
-      "Creating container with overlay",
+      "Creating container with writable rootfs",
       metadata: [
         "id": "\(id)",
         "policy": "\(policy.name)",
-        "baseRootfs": "\(rootfs.path)"
+        "baseRootfs": "\(rootfs.path)",
+        "containerRootfs": "\(containerRootfsPath.path)"
       ])
 
     let rootfsMount = Mount.block(
       format: "ext4",
-      source: rootfs.path,
+      source: containerRootfsPath.path,
       destination: "/"
     )
 
@@ -190,25 +191,22 @@ actor SandboxManager {
           try? FileManager.default.createDirectory(
             at: containerDir, withIntermediateDirectories: true)
 
-          let overlayUpperDir = containerDir.appendingPathComponent("upper")
-          let overlayWorkDir = containerDir.appendingPathComponent("work")
-
-          try? FileManager.default.createDirectory(
-            at: overlayUpperDir, withIntermediateDirectories: true)
-          try? FileManager.default.createDirectory(
-            at: overlayWorkDir, withIntermediateDirectories: true)
+          let containerRootfsPath = containerDir.appendingPathComponent("rootfs.ext4")
+          
+          try FileManager.default.copyItem(at: rootfs, to: containerRootfsPath)
 
           logger.info(
-            "Creating container with streaming and overlay",
+            "Creating container with writable rootfs",
             metadata: [
               "id": "\(id)",
               "policy": "\(policy.name)",
-              "baseRootfs": "\(rootfs.path)"
+              "baseRootfs": "\(rootfs.path)",
+              "containerRootfs": "\(containerRootfsPath.path)"
             ])
 
           let rootfsMount = Mount.block(
             format: "ext4",
-            source: rootfs.path,
+            source: containerRootfsPath.path,
             destination: "/"
           )
 
@@ -225,7 +223,9 @@ actor SandboxManager {
             logger: logger
           )
 
-          let stdinReader = allocateTty ? EmptyStdinReader() : nil
+          let grpcStdinReader = GRPCStdinReader()
+          stdinWriters[id] = grpcStdinReader
+          let stdinReader: (any ReaderStream)? = grpcStdinReader
 
           let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
             CapabilityEnforcer.configure(
@@ -313,6 +313,10 @@ actor SandboxManager {
     }
   }
 
+  func getStdinWriter(id: String) -> GRPCStdinReader? {
+    return stdinWriters[id]
+  }
+
   private func generateContainerPid(_ id: String) -> Int32 {
     var hasher = Hasher()
     hasher.combine(id)
@@ -378,6 +382,11 @@ actor SandboxManager {
       ])
 
     containers.removeValue(forKey: id)
+    
+    if let stdinWriter = stdinWriters.removeValue(forKey: id) {
+      stdinWriter.finish()
+    }
+    
     await daemon?.decrementActiveSandboxCount()
 
     if var info = containerInfo[id] {
@@ -413,6 +422,43 @@ actor SandboxManager {
           "id": "\(id)",
           "error": "\(error)"
         ])
+    }
+  }
+
+  private func cleanupStaleContainers() {
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser
+    let containersDir =
+      homeDir
+      .appendingPathComponent(".hops")
+      .appendingPathComponent("containers")
+
+    guard FileManager.default.fileExists(atPath: containersDir.path) else {
+      return
+    }
+
+    do {
+      let containerDirs = try FileManager.default.contentsOfDirectory(
+        at: containersDir,
+        includingPropertiesForKeys: nil
+      )
+
+      for containerDir in containerDirs where containerDir.hasDirectoryPath {
+        let containerId = containerDir.lastPathComponent
+
+        do {
+          try FileManager.default.removeItem(at: containerDir)
+          logger.info("Cleaned up stale container", metadata: ["id": "\(containerId)"])
+        } catch {
+          logger.warning(
+            "Failed to cleanup stale container",
+            metadata: [
+              "id": "\(containerId)",
+              "error": "\(error)"
+            ])
+        }
+      }
+    } catch {
+      logger.warning("Failed to enumerate container directories", metadata: ["error": "\(error)"])
     }
   }
 }
@@ -579,5 +625,41 @@ final class EmptyStdinReader: ReaderStream, Sendable {
     AsyncStream { continuation in
       continuation.finish()
     }
+  }
+}
+
+final class GRPCStdinReader: ReaderStream, @unchecked Sendable {
+  private let continuation: AsyncStream<Data>.Continuation
+  private let dataStream: AsyncStream<Data>
+  private let lock = NSLock()
+  private var isFinished = false
+  
+  init() {
+    let (stream, continuation) = AsyncStream<Data>.makeStream()
+    self.dataStream = stream
+    self.continuation = continuation
+  }
+  
+  nonisolated func stream() -> AsyncStream<Data> {
+    return dataStream
+  }
+  
+  nonisolated func write(_ data: Data) {
+    lock.lock()
+    let finished = isFinished
+    lock.unlock()
+    
+    guard !finished else { return }
+    continuation.yield(data)
+  }
+  
+  nonisolated func finish() {
+    lock.lock()
+    let wasFinished = isFinished
+    isFinished = true
+    lock.unlock()
+    
+    guard !wasFinished else { return }
+    continuation.finish()
   }
 }

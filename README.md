@@ -35,6 +35,7 @@ Download from [Apple Container releases](https://github.com/apple/container/rele
 - **Daemon Architecture**: Background service manages sandbox lifecycle with gRPC over Unix socket
 - **Profile System**: Create, share, and reuse sandbox configurations across projects
 - **Secure Defaults**: Network disabled, minimal filesystem access, symlink attack prevention
+- **Interactive TTY Support**: Run interactive shells with full stdin/stdout/stderr support using `--interactive` or `-it` flag
 - **Desktop GUI**: Iced-based Rust application for visual profile management and run history
 
 ## Quick Start
@@ -99,11 +100,25 @@ hops run /tmp -- /bin/echo "Hello"
 # Run shell commands
 hops run /tmp -- /bin/sh -c "uname -a"
 
+# Interactive shell (SSH-like experience with prompts)
+hops run /tmp -- /bin/sh
+# You'll see a prompt: / $
+# Type commands in real-time and see immediate output
+# Exit with ctrl-d or "exit"
+
+# Piped input also works
+echo "ls -la" | hops run /tmp -- /bin/sh
+echo "hello" | hops run /tmp -- /bin/cat
+
+# Disable interactive mode if needed
+hops run --no-interactive /tmp -- /bin/sh
+
 # With resource limits
 hops run --cpus 2 --memory 512M /tmp -- /bin/ls
 
-# With network access
-hops run --network outbound /tmp -- /bin/wget example.com
+# With network access (NAT with DNS)
+hops run --network outbound /tmp -- /bin/ping -c 2 google.com
+hops run --network outbound /tmp -- /bin/wget -O- example.com
 
 # Check daemon status
 hops system status
@@ -258,15 +273,15 @@ Working:
 - Container execution with Alpine Linux userland
 - Streaming stdout/stderr with exit code propagation
 - Resource limits (CPU, memory, process count)
-- Per-container filesystem isolation
+- Per-container filesystem isolation with writable rootfs copies
 - gRPC CLI-daemon communication
 - Rust GUI with live daemon integration
+- Automatic container cleanup on daemon restart
+- Interactive TTY support with shell prompts (SSH-like experience, default behavior)
+- Network capabilities (disabled/loopback/outbound/full with NAT and DNS)
 
 Known Limitations:
-- No interactive TTY support
-- Single Alpine rootfs (all containers use same base image)
-- Manual container cleanup required
-- Network capabilities untested
+- None currently identified
 
 ## Documentation
 

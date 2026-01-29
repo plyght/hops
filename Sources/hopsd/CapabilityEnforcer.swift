@@ -19,10 +19,42 @@ enum CapabilityEnforcer {
     let sandbox = policy.sandbox
 
     config.hostname = sandbox.hostname ?? policy.name
-    config.process.arguments = command.isEmpty ? ["/bin/sh"] : command
+    
+    let processedCommand = processCommand(command: command, allocateTty: allocateTty)
+    let needsDNS = capabilities.network == .outbound || capabilities.network == .full
+    
+    if needsDNS && !processedCommand.isEmpty {
+      let dnsSetup = "echo 'nameserver 8.8.8.8' > /etc/resolv.conf && echo 'nameserver 8.8.4.4' >> /etc/resolv.conf"
+      
+      if processedCommand.count >= 2 && processedCommand[0] == "/bin/sh" && processedCommand[1] == "-c" {
+        let userScript = processedCommand.count > 2 ? processedCommand[2] : ""
+        config.process.arguments = ["/bin/sh", "-c", "\(dnsSetup) && \(userScript)"]
+      } else {
+        let escapedCommand = processedCommand.map { arg in
+          arg.contains(" ") || arg.contains("\"") || arg.contains("'") ? "\"\(arg.replacingOccurrences(of: "\"", with: "\\\""))\"" : arg
+        }.joined(separator: " ")
+        config.process.arguments = ["/bin/sh", "-c", "\(dnsSetup) && exec \(escapedCommand)"]
+      }
+    } else if needsDNS && processedCommand.isEmpty {
+      let dnsSetup = "echo 'nameserver 8.8.8.8' > /etc/resolv.conf && echo 'nameserver 8.8.4.4' >> /etc/resolv.conf"
+      config.process.arguments = ["/bin/sh", "-c", "\(dnsSetup) && exec /bin/sh -i"]
+    } else {
+      config.process.arguments = processedCommand.isEmpty ? ["/bin/sh", "-i"] : processedCommand
+    }
+    
     config.process.workingDirectory = sandbox.workingDirectory
 
-    for (key, value) in sandbox.environment {
+    var environmentVars = sandbox.environment
+    if allocateTty {
+      if !environmentVars.keys.contains("PS1") {
+        environmentVars["PS1"] = "\\w $ "
+      }
+      if !environmentVars.keys.contains("TERM") {
+        environmentVars["TERM"] = "xterm-256color"
+      }
+    }
+    
+    for (key, value) in environmentVars {
       config.process.environmentVariables.append("\(key)=\(value)")
     }
 
@@ -49,6 +81,33 @@ enum CapabilityEnforcer {
     configureNetwork(config: &config, capability: capabilities.network)
     configureMounts(config: &config, policy: policy)
     configureSysctl(config: &config)
+  }
+
+  private static func processCommand(command: [String], allocateTty: Bool) -> [String] {
+    guard allocateTty, !command.isEmpty else {
+      return command
+    }
+    
+    let firstArg = command[0]
+    let isShell = firstArg.hasSuffix("/sh") || 
+                  firstArg.hasSuffix("/bash") || 
+                  firstArg.hasSuffix("/ash") ||
+                  firstArg.hasSuffix("/dash") ||
+                  firstArg.hasSuffix("/zsh")
+    
+    guard isShell else {
+      return command
+    }
+    
+    if command.count == 1 {
+      return [firstArg, "-i"]
+    }
+    
+    if command.count > 1 && (command[1] == "-c" || command[1].hasPrefix("-")) {
+      return command
+    }
+    
+    return [firstArg, "-i"] + command.dropFirst()
   }
 
   private static func configureResources(
@@ -81,11 +140,10 @@ enum CapabilityEnforcer {
     case .outbound:
       do {
         let natInterface = try NATInterface(
-          ipv4Address: CIDRv4("10.0.0.5/24"),
-          ipv4Gateway: IPv4Address("10.0.0.1")
+          ipv4Address: CIDRv4("192.168.65.5/24"),
+          ipv4Gateway: IPv4Address("192.168.65.1")
         )
         config.interfaces = [natInterface]
-        config.dns = DNS(nameservers: ["8.8.8.8", "8.8.4.4"])
       } catch {
         fatalError("Failed to create NAT interface: \(error)")
       }
@@ -93,11 +151,10 @@ enum CapabilityEnforcer {
     case .full:
       do {
         let natInterface = try NATInterface(
-          ipv4Address: CIDRv4("10.0.0.5/24"),
-          ipv4Gateway: IPv4Address("10.0.0.1")
+          ipv4Address: CIDRv4("192.168.65.5/24"),
+          ipv4Gateway: IPv4Address("192.168.65.1")
         )
         config.interfaces = [natInterface]
-        config.dns = DNS(nameservers: ["8.8.8.8", "8.8.4.4"])
       } catch {
         fatalError("Failed to create NAT interface: \(error)")
       }

@@ -94,7 +94,9 @@ public struct SandboxConfig: Codable, Sendable, Equatable {
       workingDirectory: "/",
       environment: [
         "PATH": "/usr/bin:/bin",
-        "HOME": "/root"
+        "HOME": "/root",
+        "PS1": "\\w $ ",
+        "TERM": "xterm-256color"
       ]
     )
   }
