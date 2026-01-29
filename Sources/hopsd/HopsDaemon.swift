@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(Containerization)
 import Containerization
-#endif
 
 actor HopsDaemon {
     private let socketPath: String
@@ -28,13 +26,8 @@ actor HopsDaemon {
         try prepareSocketDirectory()
         removeExistingSocket()
         
-        #if canImport(Containerization)
         sandboxManager = try await SandboxManager()
         print("Sandbox manager initialized")
-        #else
-        print("WARNING: Containerization framework not available on this platform")
-        sandboxManager = nil
-        #endif
         
         containerService = ContainerService(
             socketPath: socketPath,
@@ -42,6 +35,9 @@ actor HopsDaemon {
         )
         
         try await containerService?.start()
+        
+        try setSocketPermissions()
+        
         isRunning = true
         
         print("hopsd listening on unix://\(socketPath)")
@@ -53,10 +49,7 @@ actor HopsDaemon {
         print("hopsd shutting down...")
         
         await containerService?.stop()
-        
-        #if canImport(Containerization)
         await sandboxManager?.cleanup()
-        #endif
         
         removeExistingSocket()
         isRunning = false
@@ -75,6 +68,17 @@ actor HopsDaemon {
                 attributes: [.posixPermissions: 0o700]
             )
         }
+    }
+    
+    func setSocketPermissions() throws {
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            return
+        }
+        
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: socketPath
+        )
     }
     
     private func removeExistingSocket() {

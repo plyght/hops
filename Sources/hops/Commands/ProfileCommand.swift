@@ -134,8 +134,7 @@ extension ProfileCommand {
                 throw ValidationError("Profile '\(name)' already exists. Use --force to overwrite.")
             }
             
-            let policy = templatePolicy(template ?? "default")
-            let toml = policy.toTOML()
+            let toml = templateToml(template ?? "default", name: name)
             
             try toml.write(to: profilePath, atomically: true, encoding: .utf8)
             
@@ -153,70 +152,99 @@ extension ProfileCommand {
             return home.appendingPathComponent(".hops/profiles")
         }
         
-        private func templatePolicy(_ template: String) -> Policy {
+        private func templateToml(_ template: String, name: String) -> String {
             switch template {
             case "restrictive":
-                return Policy(
-                    sandbox: SandboxConfig(
-                        root: ".",
-                        mounts: [],
-                        workdir: "/"
-                    ),
-                    capabilities: CapabilityGrants(
-                        network: .disabled,
-                        filesystem: .restricted,
-                        ipc: .none,
-                        processes: .none
-                    ),
-                    resources: ResourceLimits(
-                        cpus: 1.0,
-                        memoryBytes: 512 * 1024 * 1024,
-                        diskBytes: 1024 * 1024 * 1024
-                    )
-                )
+                return """
+                name = "\(name)"
+                version = "1.0.0"
+                description = "Restrictive sandbox profile with minimal permissions"
+                
+                [capabilities]
+                network = "disabled"
+                filesystem = []
+                allowed_paths = ["."]
+                denied_paths = ["/etc/shadow", "/etc/passwd", "/root/.ssh"]
+                
+                [capabilities.resource_limits]
+                cpus = 1
+                memory_bytes = 536870912
+                max_processes = 50
+                
+                [sandbox]
+                root_path = "/"
+                working_directory = "/"
+                hostname = "sandbox"
+                """
             
             case "build":
-                return Policy(
-                    sandbox: SandboxConfig(
-                        root: ".",
-                        mounts: [],
-                        workdir: "/"
-                    ),
-                    capabilities: CapabilityGrants(
-                        network: .outbound,
-                        filesystem: .restricted,
-                        ipc: .local,
-                        processes: .spawn
-                    ),
-                    resources: ResourceLimits(
-                        cpus: 4.0,
-                        memoryBytes: 4 * 1024 * 1024 * 1024,
-                        diskBytes: nil
-                    )
-                )
+                return """
+                name = "\(name)"
+                version = "1.0.0"
+                description = "Build environment with network access for package downloads"
+                
+                [capabilities]
+                network = "outbound"
+                filesystem = ["read", "write", "execute"]
+                allowed_paths = ["/usr", "/lib", "/bin", "."]
+                denied_paths = ["/etc/shadow", "/root/.ssh"]
+                
+                [capabilities.resource_limits]
+                cpus = 4
+                memory_bytes = 4294967296
+                max_processes = 256
+                
+                [sandbox]
+                root_path = "/"
+                working_directory = "/"
+                hostname = "build-sandbox"
+                """
             
             case "network-only":
-                return Policy(
-                    sandbox: SandboxConfig(
-                        root: ".",
-                        mounts: [],
-                        workdir: "/"
-                    ),
-                    capabilities: CapabilityGrants(
-                        network: .full,
-                        filesystem: .restricted,
-                        ipc: .none,
-                        processes: .none
-                    ),
-                    resources: ResourceLimits(
-                        cpus: 2.0,
-                        memoryBytes: 1024 * 1024 * 1024,
-                        diskBytes: nil
-                    )
-                )
+                return """
+                name = "\(name)"
+                version = "1.0.0"
+                description = "Full network access with restricted filesystem"
+                
+                [capabilities]
+                network = "full"
+                filesystem = ["read"]
+                allowed_paths = ["."]
+                denied_paths = ["/etc/shadow", "/etc/passwd", "/root/.ssh", "/var/run/docker.sock"]
+                
+                [capabilities.resource_limits]
+                cpus = 2
+                memory_bytes = 1073741824
+                max_processes = 100
+                
+                [sandbox]
+                root_path = "/"
+                working_directory = "/"
+                hostname = "network-sandbox"
+                """
             
             default:
-                return Policy.default
+                return """
+                name = "\(name)"
+                version = "1.0.0"
+                description = "Default sandbox profile"
+                
+                [capabilities]
+                network = "disabled"
+                filesystem = ["read", "execute"]
+                allowed_paths = ["."]
+                denied_paths = ["/etc/shadow", "/etc/passwd"]
+                
+                [capabilities.resource_limits]
+                cpus = 2
+                memory_bytes = 536870912
+                max_processes = 100
+                
+                [sandbox]
+                root_path = "/"
+                working_directory = "/"
+                hostname = "sandbox"
+                """
             }
         }
     }

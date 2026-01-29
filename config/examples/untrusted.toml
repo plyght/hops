@@ -1,15 +1,39 @@
-[sandbox]
-root = "/tmp/sandbox"
+name = "untrusted"
+version = "1.0.0"
+description = "Maximum security for untrusted code - no network, minimal filesystem access, strict resource limits"
 
 [capabilities]
 network = "disabled"
+filesystem = ["read"]
+allowed_paths = []
+denied_paths = [
+    "/",
+    "/usr",
+    "/System",
+    "/Library",
+    "/Users",
+    "/private",
+    "/var",
+    "/etc"
+]
 
-[capabilities.filesystem]
-read = ["/tmp/sandbox"]
-write = ["/tmp/sandbox/output"]
-execute = []
-
-[resources]
+[capabilities.resource_limits]
 cpus = 1
-memory = "256M"
+memory_bytes = 268435456
 max_processes = 10
+
+[sandbox]
+root_path = "/tmp/hops-sandbox"
+working_directory = "/sandbox"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/tmp"
+type = "tmpfs"
+mode = "rw"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/sandbox"
+type = "tmpfs"
+mode = "rw"

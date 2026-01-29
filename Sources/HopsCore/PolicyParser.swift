@@ -48,12 +48,12 @@ public struct PolicyParser: Sendable {
             throw PolicyParserError.invalidTOML(error.localizedDescription)
         }
         
-        guard let name = toml.string(for: "name") else {
+        guard let name = toml["name"]?.string else {
             throw PolicyParserError.missingRequiredField("name")
         }
         
-        let version = toml.string(for: "version") ?? "1.0.0"
-        let description = toml.string(for: "description")
+        let version = toml["version"]?.string ?? "1.0.0"
+        let description = toml["description"]?.string
         
         let capabilities = try parseCapabilities(from: toml)
         let sandbox = try parseSandbox(from: toml)
@@ -70,26 +70,44 @@ public struct PolicyParser: Sendable {
     }
     
     private func parseCapabilities(from toml: TOMLTable) throws -> CapabilityGrant {
-        guard let capTable = toml.table(for: "capabilities") else {
+        guard let capTable = toml["capabilities"]?.table else {
             return .default
         }
         
-        let networkStr = capTable.string(for: "network") ?? "disabled"
+        let networkStr = capTable["network"]?.string ?? "disabled"
         guard let network = NetworkCapability(rawValue: networkStr) else {
             throw PolicyParserError.invalidFieldValue("capabilities.network", "unknown value: \(networkStr)")
         }
         
-        let filesystemArr = capTable.array(for: "filesystem")?.compactMap { $0.string } ?? []
         var filesystem = Set<FilesystemCapability>()
-        for fsStr in filesystemArr {
-            guard let fs = FilesystemCapability(rawValue: fsStr) else {
-                throw PolicyParserError.invalidFieldValue("capabilities.filesystem", "unknown value: \(fsStr)")
+        if let filesystemArr = capTable["filesystem"]?.array {
+            for item in filesystemArr {
+                if let fsStr = item.string {
+                    guard let fs = FilesystemCapability(rawValue: fsStr) else {
+                        throw PolicyParserError.invalidFieldValue("capabilities.filesystem", "unknown value: \(fsStr)")
+                    }
+                    filesystem.insert(fs)
+                }
             }
-            filesystem.insert(fs)
         }
         
-        let allowedPaths = Set(capTable.array(for: "allowed_paths")?.compactMap { $0.string } ?? [])
-        let deniedPaths = Set(capTable.array(for: "denied_paths")?.compactMap { $0.string } ?? [])
+        var allowedPaths = Set<String>()
+        if let allowedArr = capTable["allowed_paths"]?.array {
+            for item in allowedArr {
+                if let path = item.string {
+                    allowedPaths.insert(path)
+                }
+            }
+        }
+        
+        var deniedPaths = Set<String>()
+        if let deniedArr = capTable["denied_paths"]?.array {
+            for item in deniedArr {
+                if let path = item.string {
+                    deniedPaths.insert(path)
+                }
+            }
+        }
         
         let resourceLimits = try parseResourceLimits(from: capTable)
         
@@ -103,13 +121,13 @@ public struct PolicyParser: Sendable {
     }
     
     private func parseResourceLimits(from table: TOMLTable) throws -> ResourceLimits {
-        guard let limitsTable = table.table(for: "resource_limits") else {
+        guard let limitsTable = table["resource_limits"]?.table else {
             return ResourceLimits()
         }
         
-        let cpus = limitsTable.int(for: "cpus").map { UInt($0) }
-        let memoryBytes = limitsTable.int(for: "memory_bytes").map { UInt64($0) }
-        let maxProcesses = limitsTable.int(for: "max_processes").map { UInt($0) }
+        let cpus = limitsTable["cpus"]?.int.map { UInt($0) }
+        let memoryBytes = limitsTable["memory_bytes"]?.int.map { UInt64($0) }
+        let maxProcesses = limitsTable["max_processes"]?.int.map { UInt($0) }
         
         return ResourceLimits(
             cpus: cpus,
@@ -119,16 +137,16 @@ public struct PolicyParser: Sendable {
     }
     
     private func parseSandbox(from toml: TOMLTable) throws -> SandboxConfig {
-        guard let sandboxTable = toml.table(for: "sandbox") else {
+        guard let sandboxTable = toml["sandbox"]?.table else {
             return .default
         }
         
-        let rootPath = sandboxTable.string(for: "root_path") ?? "/"
-        let hostname = sandboxTable.string(for: "hostname")
-        let workingDirectory = sandboxTable.string(for: "working_directory") ?? "/"
+        let rootPath = sandboxTable["root_path"]?.string ?? "/"
+        let hostname = sandboxTable["hostname"]?.string
+        let workingDirectory = sandboxTable["working_directory"]?.string ?? "/"
         
         var mounts: [MountConfig] = []
-        if let mountsArr = sandboxTable.array(for: "mounts") {
+        if let mountsArr = sandboxTable["mounts"]?.array {
             for mountItem in mountsArr {
                 guard let mountTable = mountItem.table else { continue }
                 let mount = try parseMount(from: mountTable)
@@ -137,7 +155,7 @@ public struct PolicyParser: Sendable {
         }
         
         var environment: [String: String] = [:]
-        if let envTable = sandboxTable.table(for: "environment") {
+        if let envTable = sandboxTable["environment"]?.table {
             for (key, value) in envTable {
                 if let strValue = value.string {
                     environment[key] = strValue
@@ -155,24 +173,31 @@ public struct PolicyParser: Sendable {
     }
     
     private func parseMount(from table: TOMLTable) throws -> MountConfig {
-        guard let source = table.string(for: "source") else {
+        guard let source = table["source"]?.string else {
             throw PolicyParserError.missingRequiredField("mount.source")
         }
-        guard let destination = table.string(for: "destination") else {
+        guard let destination = table["destination"]?.string else {
             throw PolicyParserError.missingRequiredField("mount.destination")
         }
         
-        let typeStr = table.string(for: "type") ?? "bind"
+        let typeStr = table["type"]?.string ?? "bind"
         guard let type = MountType(rawValue: typeStr) else {
             throw PolicyParserError.invalidFieldValue("mount.type", "unknown value: \(typeStr)")
         }
         
-        let modeStr = table.string(for: "mode") ?? "ro"
+        let modeStr = table["mode"]?.string ?? "ro"
         guard let mode = MountMode(rawValue: modeStr) else {
             throw PolicyParserError.invalidFieldValue("mount.mode", "unknown value: \(modeStr)")
         }
         
-        let options = table.array(for: "options")?.compactMap { $0.string } ?? []
+        var options: [String] = []
+        if let optionsArr = table["options"]?.array {
+            for item in optionsArr {
+                if let opt = item.string {
+                    options.append(opt)
+                }
+            }
+        }
         
         return MountConfig(
             source: source,
@@ -184,7 +209,7 @@ public struct PolicyParser: Sendable {
     }
     
     private func parseMetadata(from toml: TOMLTable) -> [String: String] {
-        guard let metaTable = toml.table(for: "metadata") else {
+        guard let metaTable = toml["metadata"]?.table else {
             return [:]
         }
         

@@ -1,15 +1,46 @@
-[sandbox]
-root = "."
+name = "default"
+version = "1.0.0"
+description = "Default sandbox profile with minimal network and moderate resource limits"
 
 [capabilities]
 network = "disabled"
+filesystem = ["read", "execute"]
+allowed_paths = [
+    "/usr/lib",
+    "/usr/local/lib",
+    "/System/Library",
+    "/Library/Frameworks"
+]
+denied_paths = [
+    "/etc/shadow",
+    "/etc/master.passwd",
+    "/var/db/dslocal",
+    "/private/var/db/dslocal"
+]
 
-[capabilities.filesystem]
-read = ["."]
-write = []
-execute = ["."]
-
-[resources]
+[capabilities.resource_limits]
 cpus = 2
-memory = "512M"
+memory_bytes = 536870912
 max_processes = 100
+
+[sandbox]
+root_path = "/"
+working_directory = "/"
+
+[[sandbox.mounts]]
+source = "/usr"
+destination = "/usr"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "/System"
+destination = "/System"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/tmp"
+type = "tmpfs"
+mode = "rw"

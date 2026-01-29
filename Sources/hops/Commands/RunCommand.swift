@@ -1,6 +1,10 @@
 import ArgumentParser
 import Foundation
 import HopsCore
+import HopsProto
+import GRPC
+import NIO
+import SwiftProtobuf
 
 struct RunCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -114,7 +118,7 @@ struct RunCommand: AsyncParsableCommand {
             if policy.resources == nil {
                 policy.resources = ResourceLimits()
             }
-            policy.resources?.cpus = cpusOverride
+            policy.resources?.cpus = UInt(cpusOverride.rounded())
         }
         
         if let memoryOverride = memory {
@@ -212,17 +216,135 @@ struct RunCommand: AsyncParsableCommand {
 }
 
 struct DaemonClient {
+    private let client: Hops_HopsServiceNIOClient
+    private let group: MultiThreadedEventLoopGroup
+    private let channel: GRPCChannel
+    
+    private init(client: Hops_HopsServiceNIOClient, group: MultiThreadedEventLoopGroup, channel: GRPCChannel) {
+        self.client = client
+        self.group = group
+        self.channel = channel
+    }
+    
     static func connect() async throws -> DaemonClient {
-        return DaemonClient()
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let socketPath = homeDir
+            .appendingPathComponent(".hops")
+            .appendingPathComponent("hops.sock")
+            .path
+        
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        
+        let channel = try GRPCChannelPool.with(
+            target: .unixDomainSocket(socketPath),
+            transportSecurity: .plaintext,
+            eventLoopGroup: group
+        )
+        
+        let client = Hops_HopsServiceNIOClient(
+            channel: channel,
+            defaultCallOptions: CallOptions()
+        )
+        
+        return DaemonClient(client: client, group: group, channel: channel)
     }
     
     func execute(_ request: SandboxExecuteRequest) async throws -> SandboxExecuteResponse {
-        return SandboxExecuteResponse(outputStream: AsyncThrowingStream { continuation in
+        var runRequest = Hops_RunRequest()
+        runRequest.command = request.command
+        runRequest.workingDirectory = request.sandboxRoot
+        
+        let policy = request.policy
+        var protoPolicy = Hops_Policy()
+        
+        var capabilities = Hops_Capabilities()
+        capabilities.network = convertNetworkCapability(policy.capabilities.network)
+        
+        var filesystem = Hops_FilesystemCapabilities()
+        filesystem.read = Array(policy.capabilities.allowedPaths)
+        filesystem.write = Array(policy.capabilities.allowedPaths)
+        filesystem.execute = Array(policy.capabilities.allowedPaths)
+        capabilities.filesystem = filesystem
+        
+        protoPolicy.capabilities = capabilities
+        
+        let resourceLimits = policy.capabilities.resourceLimits
+        var protoResources = Hops_ResourceLimits()
+        
+        if let cpus = resourceLimits.cpus {
+            protoResources.cpus = Int32(cpus)
+        }
+        
+        if let memory = resourceLimits.memoryBytes {
+            protoResources.memory = formatBytes(memory)
+        }
+        
+        if let maxProcs = resourceLimits.maxProcesses {
+            protoResources.maxProcesses = Int32(maxProcs)
+        }
+        
+        protoPolicy.resources = protoResources
+        
+        runRequest.inlinePolicy = protoPolicy
+        
+        let call = client.runSandbox(runRequest, callOptions: nil)
+        
+        let response = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Hops_RunResponse, Error>) in
+            call.response.whenComplete { result in
+                continuation.resume(with: result)
+            }
+        }
+        
+        guard response.success else {
+            throw DaemonClientError.executionFailed(response.error)
+        }
+        
+        let outputStream = AsyncThrowingStream<OutputChunk, Error> { continuation in
             Task {
+                continuation.yield(.exitCode(0))
                 continuation.finish()
             }
-        })
+        }
+        
+        return SandboxExecuteResponse(outputStream: outputStream)
     }
+    
+    func close() async throws {
+        try await group.shutdownGracefully()
+    }
+    
+    private func convertNetworkCapability(_ capability: NetworkCapability) -> Hops_NetworkAccess {
+        switch capability {
+        case .disabled:
+            return .disabled
+        case .outbound:
+            return .outbound
+        case .loopback:
+            return .loopback
+        case .full:
+            return .full
+        }
+    }
+    
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let kb = Double(bytes) / 1024.0
+        let mb = kb / 1024.0
+        let gb = mb / 1024.0
+        
+        if gb >= 1.0 {
+            return String(format: "%.0fG", gb)
+        } else if mb >= 1.0 {
+            return String(format: "%.0fM", mb)
+        } else if kb >= 1.0 {
+            return String(format: "%.0fK", kb)
+        } else {
+            return "\(bytes)B"
+        }
+    }
+}
+
+enum DaemonClientError: Error {
+    case executionFailed(String)
 }
 
 struct SandboxExecuteRequest {

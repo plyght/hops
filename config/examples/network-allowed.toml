@@ -1,15 +1,56 @@
-[sandbox]
-root = "./project"
+name = "network-allowed"
+version = "1.0.0"
+description = "Network-enabled sandbox for applications requiring outbound connectivity"
 
 [capabilities]
 network = "outbound"
+filesystem = ["read", "write", "execute"]
+allowed_paths = [
+    "/usr/lib",
+    "/usr/local/lib",
+    "/System/Library",
+    "/etc/ssl",
+    "/etc/resolv.conf",
+    "/private/etc/ssl",
+    "/private/etc/resolv.conf"
+]
+denied_paths = [
+    "/etc/shadow",
+    "/etc/master.passwd",
+    "/var/db/dslocal",
+    "/private/var/db/dslocal",
+    "/Users"
+]
 
-[capabilities.filesystem]
-read = ["./project", "/usr/lib", "/etc/ssl", "/etc/resolv.conf"]
-write = ["./project/data", "./project/logs"]
-execute = ["./project/bin"]
-
-[resources]
+[capabilities.resource_limits]
 cpus = 4
-memory = "1G"
+memory_bytes = 1073741824
 max_processes = 200
+
+[sandbox]
+root_path = "/"
+working_directory = "/"
+
+[[sandbox.mounts]]
+source = "/usr"
+destination = "/usr"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "/System"
+destination = "/System"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "/etc/ssl"
+destination = "/etc/ssl"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/tmp"
+type = "tmpfs"
+mode = "rw"

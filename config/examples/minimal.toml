@@ -1,0 +1,28 @@
+name = "minimal"
+version = "1.0.0"
+description = "Absolute minimum permissions - no network, no filesystem, minimal resources"
+
+[capabilities]
+network = "disabled"
+filesystem = []
+allowed_paths = []
+denied_paths = ["/"]
+
+[capabilities.resource_limits]
+cpus = 1
+memory_bytes = 134217728
+max_processes = 5
+
+[sandbox]
+root_path = "/tmp/hops-minimal"
+working_directory = "/sandbox"
+hostname = "minimal-sandbox"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/sandbox"
+type = "tmpfs"
+mode = "rw"
+
+[sandbox.environment]
+PATH = ""

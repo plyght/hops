@@ -40,6 +40,19 @@ public struct PolicyValidator: Sendable {
     public let maxCPUs: UInt
     public let maxProcesses: UInt
     
+    private let sensitivePaths = [
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/etc/passwd",
+        "/etc/master.passwd",
+        "/root/.ssh",
+        "/var/root/.ssh",
+        "/var/run/docker.sock",
+        "/var/db/dslocal",
+        "/Library/Keychains",
+        "/System/Library/Security"
+    ]
+    
     public init(
         maxMemoryBytes: UInt64 = 8_589_934_592,
         maxCPUs: UInt = 16,
@@ -48,6 +61,11 @@ public struct PolicyValidator: Sendable {
         self.maxMemoryBytes = maxMemoryBytes
         self.maxCPUs = maxCPUs
         self.maxProcesses = maxProcesses
+    }
+    
+    private func canonicalizePath(_ path: String) -> String {
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        return URL(fileURLWithPath: expandedPath).standardized.path
     }
     
     public func validate(_ policy: Policy) throws {
@@ -61,8 +79,12 @@ public struct PolicyValidator: Sendable {
             throw PolicyValidationError.emptyName
         }
         
-        let versionPattern = /^\d+\.\d+\.\d+$/
-        if policy.version.firstMatch(of: versionPattern) == nil {
+        let versionPattern = "^\\d+\\.\\d+\\.\\d+$"
+        guard let regex = try? NSRegularExpression(pattern: versionPattern, options: []) else {
+            throw PolicyValidationError.invalidVersion(policy.version)
+        }
+        let range = NSRange(policy.version.startIndex..., in: policy.version)
+        if regex.firstMatch(in: policy.version, options: [], range: range) == nil {
             throw PolicyValidationError.invalidVersion(policy.version)
         }
     }
@@ -78,7 +100,9 @@ public struct PolicyValidator: Sendable {
         
         for allowedPath in capabilities.allowedPaths {
             for deniedPath in capabilities.deniedPaths {
-                if allowedPath.hasPrefix(deniedPath) || deniedPath.hasPrefix(allowedPath) {
+                let canonAllowed = canonicalizePath(allowedPath)
+                let canonDenied = canonicalizePath(deniedPath)
+                if canonAllowed.hasPrefix(canonDenied) || canonDenied.hasPrefix(canonAllowed) {
                     throw PolicyValidationError.conflictingPaths(allowedPath, deniedPath)
                 }
             }
@@ -126,26 +150,73 @@ public struct PolicyValidator: Sendable {
             throw PolicyValidationError.mountDestinationNotAbsolute(mount.destination)
         }
         
-        let sensitivePaths = ["/etc/shadow", "/etc/sudoers", "/root/.ssh"]
-        if mount.mode == .readWrite {
+        if mount.type == .bind {
+            let canonSource = canonicalizePath(mount.source)
+            
+            if !FileManager.default.fileExists(atPath: canonSource) {
+                throw PolicyValidationError.invalidRootPath("Mount source does not exist: \(mount.source)")
+            }
+            
+            var isSymlink = false
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: canonSource),
+               let fileType = attrs[.type] as? FileAttributeType,
+               fileType == .typeSymbolicLink {
+                isSymlink = true
+            }
+            
+            if isSymlink {
+                let resolvedSource = try FileManager.default.destinationOfSymbolicLink(atPath: canonSource)
+                let resolvedCanon = canonicalizePath(resolvedSource)
+                
+                for sensitivePath in sensitivePaths {
+                    let canonSensitive = canonicalizePath(sensitivePath)
+                    if resolvedCanon.hasPrefix(canonSensitive) || canonSensitive.hasPrefix(resolvedCanon) {
+                        throw PolicyValidationError.insecureMountConfiguration(
+                            "Mount source is a symlink to sensitive path: \(mount.source) -> \(resolvedSource)"
+                        )
+                    }
+                }
+            }
+            
             for sensitivePath in sensitivePaths {
-                if mount.destination.hasPrefix(sensitivePath) {
+                let canonSensitive = canonicalizePath(sensitivePath)
+                if canonSource.hasPrefix(canonSensitive) || canonSensitive.hasPrefix(canonSource) {
                     throw PolicyValidationError.insecureMountConfiguration(
-                        "Read-write access to \(sensitivePath) is not allowed"
+                        "Mount source overlaps with sensitive path: \(mount.source)"
                     )
+                }
+            }
+        }
+        
+        let canonDestination = canonicalizePath(mount.destination)
+        
+        for sensitivePath in sensitivePaths {
+            let canonSensitive = canonicalizePath(sensitivePath)
+            
+            if mount.mode == .readWrite {
+                if canonDestination.hasPrefix(canonSensitive) || canonSensitive.hasPrefix(canonDestination) {
+                    throw PolicyValidationError.insecureMountConfiguration(
+                        "Read-write access to sensitive path not allowed: \(mount.destination)"
+                    )
+                }
+            }
+            
+            if canonDestination.hasPrefix(canonSensitive) {
+                if mount.mode == .readOnly {
+                    continue
                 }
             }
         }
     }
     
     private func validateMountConflicts(_ mounts: [MountConfig]) throws {
-        let destinations = mounts.map { $0.destination }
+        let destinations = mounts.map { canonicalizePath($0.destination) }
         for i in 0..<destinations.count {
             for j in (i+1)..<destinations.count {
                 let dest1 = destinations[i]
                 let dest2 = destinations[j]
                 if dest1.hasPrefix(dest2) || dest2.hasPrefix(dest1) {
-                    throw PolicyValidationError.conflictingPaths(dest1, dest2)
+                    throw PolicyValidationError.conflictingPaths(mounts[i].destination, mounts[j].destination)
                 }
             }
         }

@@ -9,7 +9,7 @@
 	<array>
 		<string>/usr/local/bin/hopsd</string>
 		<string>--socket</string>
-		<string>/var/run/hops/hops.sock</string>
+		<string>$HOME/.hops/hops.sock</string>
 	</array>
 	
 	<key>RunAtLoad</key>
@@ -19,15 +19,17 @@
 	<true/>
 	
 	<key>StandardOutPath</key>
-	<string>/usr/local/var/log/hops/hopsd.log</string>
+	<string>$HOME/.hops/logs/hopsd.log</string>
 	
 	<key>StandardErrorPath</key>
-	<string>/usr/local/var/log/hops/hopsd.error.log</string>
+	<string>$HOME/.hops/logs/hopsd.error.log</string>
 	
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>HOPS_CONFIG_DIR</key>
-		<string>/usr/local/etc/hops</string>
+		<string>$HOME/.hops</string>
+		<key>HOME</key>
+		<string>$HOME</string>
 	</dict>
 	
 	<key>ThrottleInterval</key>

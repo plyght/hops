@@ -1,23 +1,25 @@
 import Foundation
 import HopsCore
-#if canImport(Containerization)
 import Containerization
-#endif
+import Logging
+import NIOCore
+import NIOPosix
 
 actor SandboxManager {
-    #if canImport(Containerization)
-    private var vmm: VirtualMachineManager?
+    private var vmm: VZVirtualMachineManager?
+    private var eventLoopGroup: MultiThreadedEventLoopGroup?
     private var containers: [String: LinuxContainer] = [:]
     private var containerInfo: [String: ContainerMetadata] = [:]
-    #endif
+    private let logger: Logger
     
     init() async throws {
-        #if canImport(Containerization)
+        var logger = Logger(label: "ai.hops.SandboxManager")
+        logger.logLevel = .info
+        self.logger = logger
+        
         try await initializeVMM()
-        #endif
     }
     
-    #if canImport(Containerization)
     private func initializeVMM() async throws {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let hopsDir = homeDir.appendingPathComponent(".hops")
@@ -34,11 +36,27 @@ actor SandboxManager {
         }
         
         let kernel = Kernel(path: vmlinuxPath, platform: .linuxArm)
-        vmm = VirtualMachineManager(kernel: kernel, initfs: initfsPath)
+        let initfsMount = Mount.block(
+            format: "ext4",
+            source: initfsPath.path,
+            destination: "/",
+            options: ["ro"]
+        )
         
-        print("VirtualMachineManager initialized")
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+        self.eventLoopGroup = group
+        
+        self.vmm = VZVirtualMachineManager(
+            kernel: kernel,
+            initialFilesystem: initfsMount,
+            group: group
+        )
+        
+        logger.info("VirtualMachineManager initialized", metadata: [
+            "kernel": "\(vmlinuxPath.path)",
+            "initfs": "\(initfsPath.path)"
+        ])
     }
-    #endif
     
     func runSandbox(
         id: String,
@@ -46,7 +64,6 @@ actor SandboxManager {
         command: [String],
         rootfs: URL
     ) async throws -> SandboxStatus {
-        #if canImport(Containerization)
         guard let vmm = vmm else {
             throw SandboxManagerError.vmmNotInitialized
         }
@@ -55,7 +72,19 @@ actor SandboxManager {
             throw SandboxManagerError.containerAlreadyExists(id)
         }
         
-        let container = try LinuxContainer(id, rootfs: rootfs, vmm: vmm) { config in
+        logger.info("Creating container", metadata: [
+            "id": "\(id)",
+            "policy": "\(policy.name)",
+            "rootfs": "\(rootfs.path)"
+        ])
+        
+        let rootfsMount = Mount.block(
+            format: "ext4",
+            source: rootfs.path,
+            destination: "/"
+        )
+        
+        let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
             CapabilityEnforcer.configure(
                 config: &config,
                 policy: policy,
@@ -70,11 +99,14 @@ actor SandboxManager {
         )
         
         try await container.create()
+        logger.info("Container created", metadata: ["id": "\(id)"])
+        
         try await container.start()
+        logger.info("Container started", metadata: ["id": "\(id)"])
         
         Task {
             let status = try await container.wait()
-            await handleContainerExit(id: id, exitCode: status)
+            await handleContainerExit(id: id, exitCode: Int(status.exitCode))
         }
         
         return SandboxStatus(
@@ -84,16 +116,14 @@ actor SandboxManager {
             startedAt: containerInfo[id]?.startedAt,
             finishedAt: nil
         )
-        #else
-        throw SandboxManagerError.notSupported
-        #endif
     }
     
     func stopSandbox(id: String) async throws {
-        #if canImport(Containerization)
         guard let container = containers[id] else {
             throw SandboxManagerError.containerNotFound(id)
         }
+        
+        logger.info("Stopping container", metadata: ["id": "\(id)"])
         
         try await container.stop()
         containers.removeValue(forKey: id)
@@ -103,13 +133,11 @@ actor SandboxManager {
             info.exitCode = nil
             containerInfo[id] = info
         }
-        #else
-        throw SandboxManagerError.notSupported
-        #endif
+        
+        logger.info("Container stopped", metadata: ["id": "\(id)"])
     }
     
     func listSandboxes() -> [SandboxInfo] {
-        #if canImport(Containerization)
         return containerInfo.map { id, metadata in
             SandboxInfo(
                 id: id,
@@ -118,13 +146,9 @@ actor SandboxManager {
                 startedAt: metadata.startedAt
             )
         }
-        #else
-        return []
-        #endif
     }
     
     func getStatus(id: String) async throws -> SandboxStatus {
-        #if canImport(Containerization)
         guard let metadata = containerInfo[id] else {
             throw SandboxManagerError.containerNotFound(id)
         }
@@ -138,25 +162,45 @@ actor SandboxManager {
             startedAt: metadata.startedAt,
             finishedAt: metadata.finishedAt
         )
-        #else
-        throw SandboxManagerError.notSupported
-        #endif
+    }
+    
+    func getStatistics(id: String) async throws -> ContainerStatistics? {
+        guard let container = containers[id] else {
+            return nil
+        }
+        
+        let stats = try await container.statistics()
+        
+        let cpuNanos = (stats.cpu?.usageUsec ?? 0) * 1000
+        let memoryBytes = stats.memory?.usageBytes ?? 0
+        let networkRx = stats.networks?.first?.receivedBytes ?? 0
+        let networkTx = stats.networks?.first?.transmittedBytes ?? 0
+        
+        return ContainerStatistics(
+            cpuUsageNanos: cpuNanos,
+            memoryUsageBytes: memoryBytes,
+            networkRxBytes: networkRx,
+            networkTxBytes: networkTx
+        )
     }
     
     func cleanup() async {
-        #if canImport(Containerization)
         for (id, container) in containers {
-            print("Cleaning up container \(id)")
+            logger.info("Cleaning up container", metadata: ["id": "\(id)"])
             try? await container.stop()
         }
         containers.removeAll()
         vmm = nil
-        #endif
+        
+        try? await eventLoopGroup?.shutdownGracefully()
+        eventLoopGroup = nil
     }
     
-    #if canImport(Containerization)
     private func handleContainerExit(id: String, exitCode: Int) async {
-        print("Container \(id) exited with code \(exitCode)")
+        logger.info("Container exited", metadata: [
+            "id": "\(id)",
+            "exitCode": "\(exitCode)"
+        ])
         
         containers.removeValue(forKey: id)
         
@@ -166,17 +210,21 @@ actor SandboxManager {
             containerInfo[id] = info
         }
     }
-    #endif
 }
 
-#if canImport(Containerization)
 private struct ContainerMetadata {
     let policyName: String
     let startedAt: Date
     var finishedAt: Date?
     var exitCode: Int?
 }
-#endif
+
+struct ContainerStatistics: Codable, Sendable {
+    let cpuUsageNanos: UInt64
+    let memoryUsageBytes: UInt64
+    let networkRxBytes: UInt64
+    let networkTxBytes: UInt64
+}
 
 enum SandboxManagerError: Error {
     case vmmNotInitialized
@@ -184,13 +232,10 @@ enum SandboxManagerError: Error {
     case containerNotFound(String)
     case missingKernel(String)
     case missingInitfs(String)
-    case notSupported
 }
 
-#if canImport(Containerization)
 extension UInt64 {
     func mib() -> UInt64 {
         return self * 1024 * 1024
     }
 }
-#endif

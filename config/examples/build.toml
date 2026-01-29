@@ -1,34 +1,39 @@
-name = "development"
+name = "build"
 version = "1.0.0"
-description = "Development environment with loopback network, full filesystem access, generous resource limits"
+description = "Build environment with network access for package downloads, increased resources for compilation"
 
 [capabilities]
-network = "loopback"
+network = "outbound"
 filesystem = ["read", "write", "execute"]
 allowed_paths = [
     "/usr",
-    "/System",
-    "/Library",
     "/usr/local",
+    "/System/Library",
+    "/Library",
     "/opt",
-    "/tmp"
+    "/tmp",
+    "/etc/ssl",
+    "/etc/resolv.conf",
+    "/private/etc/ssl",
+    "/private/etc/resolv.conf"
 ]
 denied_paths = [
     "/etc/shadow",
     "/etc/master.passwd",
     "/var/db/dslocal",
     "/private/var/db/dslocal",
-    "/System/Library/Security"
+    "/Users"
 ]
 
 [capabilities.resource_limits]
 cpus = 8
-memory_bytes = 4294967296
-max_processes = 500
+memory_bytes = 8589934592
+max_processes = 512
 
 [sandbox]
 root_path = "/"
 working_directory = "/"
+hostname = "build-sandbox"
 
 [[sandbox.mounts]]
 source = "/usr"
@@ -55,7 +60,23 @@ type = "bind"
 mode = "rw"
 
 [[sandbox.mounts]]
+source = "/opt"
+destination = "/opt"
+type = "bind"
+mode = "rw"
+
+[[sandbox.mounts]]
 source = "tmpfs"
 destination = "/tmp"
 type = "tmpfs"
 mode = "rw"
+
+[[sandbox.mounts]]
+source = "/etc/ssl"
+destination = "/etc/ssl"
+type = "bind"
+mode = "ro"
+
+[sandbox.environment]
+PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+TMPDIR = "/tmp"

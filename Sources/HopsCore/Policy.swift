@@ -8,6 +8,15 @@ public struct Policy: Codable, Sendable, Equatable {
     public var sandbox: SandboxConfig
     public var metadata: [String: String]
     
+    public var resources: ResourceLimits? {
+        get { capabilities.resourceLimits }
+        set { 
+            if let newValue = newValue {
+                capabilities.resourceLimits = newValue
+            }
+        }
+    }
+    
     public init(
         name: String,
         version: String = "1.0.0",
@@ -22,6 +31,22 @@ public struct Policy: Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.sandbox = sandbox
         self.metadata = metadata
+    }
+    
+    public static var `default`: Policy {
+        Policy(
+            name: "default",
+            version: "1.0.0",
+            description: "Default sandbox policy",
+            capabilities: .default,
+            sandbox: .default,
+            metadata: [:]
+        )
+    }
+    
+    public static func load(fromTOMLFile path: String) throws -> Policy {
+        let parser = PolicyParser()
+        return try parser.parse(fromFile: path)
     }
 }
 
@@ -54,8 +79,10 @@ public struct SandboxConfig: Codable, Sendable, Equatable {
                 .bind(source: "/lib", destination: "/lib", mode: .readOnly),
                 .bind(source: "/bin", destination: "/bin", mode: .readOnly),
                 .tmpfs(destination: "/tmp", size: "100m"),
-                .init(source: "proc", destination: "/proc", type: .proc),
-                .init(source: "devtmpfs", destination: "/dev", type: .devtmpfs)
+                .init(source: "/dev/null", destination: "/dev/null", type: .bind),
+                .init(source: "/dev/zero", destination: "/dev/zero", type: .bind),
+                .init(source: "/dev/random", destination: "/dev/random", type: .bind),
+                .init(source: "/dev/urandom", destination: "/dev/urandom", type: .bind)
             ],
             hostname: "sandbox",
             workingDirectory: "/",
