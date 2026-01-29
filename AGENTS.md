@@ -11,13 +11,20 @@ Multi-component macOS 26+ sandboxing system: CLI (hops), daemon (hopsd), GUI (ho
 
 ### Swift
 ```bash
-swift build                                           # Build all
+swift build                                           # Build all (type checks)
 swift build -c release                                # Release build
 swift build --target hops                             # Specific target
 swift test                                            # All tests
 swift test --filter PolicyParserTests                 # Test class
 swift test --filter PolicyParserTests/testMethod      # Single test
 ./generate-proto.sh                                   # Regenerate gRPC stubs
+
+# Code Quality (Swift equivalents of cargo fmt/check/clippy)
+swift-format lint --recursive Sources/ Tests/         # Check formatting (cargo fmt --check)
+swift-format --in-place --recursive Sources/ Tests/  # Format code (cargo fmt)
+swift build                                           # Type check only (cargo check)
+swiftlint lint Sources/ Tests/                       # Lint code (cargo clippy)
+swiftlint autocorrect Sources/ Tests/                # Auto-fix lint issues
 ```
 
 ### Rust (GUI)
