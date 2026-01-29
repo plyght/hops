@@ -31,6 +31,21 @@ signal(SIGTERM, SIG_IGN)
 signal(SIGINT, SIG_IGN)
 
 print("hopsd starting...")
-try await daemon.start()
+fflush(stdout)
 
-try await Task.sleep(for: .seconds(Int.max))
+Task {
+    do {
+        try await daemon.start()
+        print("hopsd started successfully")
+        fflush(stdout)
+    } catch {
+        print("Fatal error starting daemon: \(error)")
+        fflush(stdout)
+        exit(1)
+    }
+}
+
+print("Entering main loop...")
+fflush(stdout)
+
+dispatchMain()

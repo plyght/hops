@@ -29,26 +29,39 @@ actor HopsDaemon {
         do {
             sandboxManager = try await SandboxManager()
             print("Sandbox manager initialized")
+            fflush(stdout)
         } catch let error as SandboxManagerError {
             print("Error: \(error.localizedDescription)")
+            fflush(stdout)
             throw error
         } catch {
             print("Failed to initialize sandbox manager: \(error)")
+            fflush(stdout)
             throw error
         }
+        
+        print("Creating container service...")
+        fflush(stdout)
         
         containerService = ContainerService(
             socketPath: socketPath,
             sandboxManager: sandboxManager
         )
         
+        print("Starting gRPC server...")
+        fflush(stdout)
+        
         try await containerService?.start()
+        
+        print("Setting socket permissions...")
+        fflush(stdout)
         
         try setSocketPermissions()
         
         isRunning = true
         
         print("hopsd listening on unix://\(socketPath)")
+        fflush(stdout)
     }
     
     func shutdown() async {
