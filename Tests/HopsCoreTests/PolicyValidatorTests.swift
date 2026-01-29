@@ -201,6 +201,84 @@ final class PolicyValidatorTests: XCTestCase {
         }
     }
     
+    func testCPULimitTooLowThrowsError() {
+        let policy = Policy(
+            name: "test",
+            version: "1.0.0",
+            capabilities: CapabilityGrant(
+                resourceLimits: ResourceLimits(cpus: 0)
+            )
+        )
+        
+        XCTAssertThrowsError(try validator.validate(policy)) { error in
+            if case PolicyValidationError.resourceLimitTooLow(let resource, let value) = error {
+                XCTAssertEqual(resource, "cpus")
+                XCTAssertEqual(value, 0)
+            } else {
+                XCTFail("Expected resourceLimitTooLow error")
+            }
+        }
+    }
+    
+    func testMemoryLimitTooLowThrowsError() {
+        let policy = Policy(
+            name: "test",
+            version: "1.0.0",
+            capabilities: CapabilityGrant(
+                resourceLimits: ResourceLimits(memoryBytes: 1024)
+            )
+        )
+        
+        XCTAssertThrowsError(try validator.validate(policy)) { error in
+            if case PolicyValidationError.resourceLimitTooLow(let resource, let value) = error {
+                XCTAssertEqual(resource, "memory")
+                XCTAssertEqual(value, 1024)
+            } else {
+                XCTFail("Expected resourceLimitTooLow error")
+            }
+        }
+    }
+    
+    func testProcessLimitTooLowThrowsError() {
+        let policy = Policy(
+            name: "test",
+            version: "1.0.0",
+            capabilities: CapabilityGrant(
+                resourceLimits: ResourceLimits(maxProcesses: 0)
+            )
+        )
+        
+        XCTAssertThrowsError(try validator.validate(policy)) { error in
+            if case PolicyValidationError.resourceLimitTooLow(let resource, let value) = error {
+                XCTAssertEqual(resource, "max_processes")
+                XCTAssertEqual(value, 0)
+            } else {
+                XCTFail("Expected resourceLimitTooLow error")
+            }
+        }
+    }
+    
+    func testMinimumResourceLimitsBoundaryPass() throws {
+        let validator = PolicyValidator(
+            minMemoryBytes: 1_048_576,
+            minCPUs: 1,
+            minProcesses: 1
+        )
+        let policy = Policy(
+            name: "test",
+            version: "1.0.0",
+            capabilities: CapabilityGrant(
+                resourceLimits: ResourceLimits(
+                    cpus: 1,
+                    memoryBytes: 1_048_576,
+                    maxProcesses: 1
+                )
+            )
+        )
+        
+        XCTAssertNoThrow(try validator.validate(policy))
+    }
+    
     func testResourceLimitsWithinBoundariesPass() throws {
         let validator = PolicyValidator(
             maxMemoryBytes: 8_589_934_592,

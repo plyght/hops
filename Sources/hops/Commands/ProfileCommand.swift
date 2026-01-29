@@ -35,21 +35,8 @@ extension ProfileCommand {
         )
         
         func run() async throws {
-            let profileDir = profileDirectory()
-            
-            guard FileManager.default.fileExists(atPath: profileDir.path) else {
-                print("No profiles found. Profile directory does not exist.")
-                print("Create your first profile with: hops profile create <name>")
-                return
-            }
-            
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: profileDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: .skipsHiddenFiles
-            )
-            
-            let profiles = contents.filter { $0.pathExtension == "toml" }
+            let manager = ProfileManager()
+            let profiles = try manager.listProfiles()
             
             if profiles.isEmpty {
                 print("No profiles found.")
@@ -58,24 +45,18 @@ extension ProfileCommand {
             }
             
             print("Available profiles:")
-            for profile in profiles.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let name = profile.deletingPathExtension().lastPathComponent
-                let modDate = try? profile.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            for profile in profiles {
+                let modDate = try? profile.path.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
                 
                 if let date = modDate {
                     let formatter = DateFormatter()
                     formatter.dateStyle = .medium
                     formatter.timeStyle = .short
-                    print("  \(name) (modified: \(formatter.string(from: date)))")
+                    print("  \(profile.name) (\(profile.location.rawValue), modified: \(formatter.string(from: date)))")
                 } else {
-                    print("  \(name)")
+                    print("  \(profile.name) (\(profile.location.rawValue))")
                 }
             }
-        }
-        
-        private func profileDirectory() -> URL {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            return home.appendingPathComponent(".hops/profiles")
         }
     }
     
@@ -88,24 +69,98 @@ extension ProfileCommand {
         @Argument(help: "Name of the profile to show")
         var name: String
         
+        @Flag(name: .long, help: "Show raw TOML instead of parsed policy")
+        var raw: Bool = false
+        
         func run() async throws {
-            let profilePath = profileDirectory().appendingPathComponent("\(name).toml")
-            
-            guard FileManager.default.fileExists(atPath: profilePath.path) else {
-                throw ValidationError("Profile '\(name)' not found at \(profilePath.path)")
+            let manager = ProfileManager()
+            guard let profileInfo = manager.findProfile(named: name) else {
+                throw ValidationError("Profile '\(name)' not found in any profile directory")
             }
             
-            let contents = try String(contentsOf: profilePath, encoding: .utf8)
-            
-            print("Profile: \(name)")
-            print("Path: \(profilePath.path)")
-            print()
-            print(contents)
+            if raw {
+                let contents = try String(contentsOf: profileInfo.path, encoding: .utf8)
+                print("Profile: \(name)")
+                print("Location: \(profileInfo.location.rawValue)")
+                print("Path: \(profileInfo.path.path)")
+                print()
+                print(contents)
+            } else {
+                let policy = try manager.loadProfile(named: name)
+                print("Profile: \(name)")
+                print("Location: \(profileInfo.location.rawValue)")
+                print("Path: \(profileInfo.path.path)")
+                print()
+                print("Name: \(policy.name)")
+                print("Version: \(policy.version)")
+                if let description = policy.description {
+                    print("Description: \(description)")
+                }
+                if let rootfs = policy.rootfs {
+                    print("Rootfs: \(rootfs)")
+                }
+                if let ociImage = policy.ociImage {
+                    print("OCI Image: \(ociImage)")
+                }
+                print()
+                print("Network: \(policy.capabilities.network)")
+                print("Filesystem: \(policy.capabilities.filesystem.map { $0.rawValue }.sorted().joined(separator: ", "))")
+                if !policy.capabilities.allowedPaths.isEmpty {
+                    print("Allowed paths: \(policy.capabilities.allowedPaths.sorted().joined(separator: ", "))")
+                }
+                if !policy.capabilities.deniedPaths.isEmpty {
+                    print("Denied paths: \(policy.capabilities.deniedPaths.sorted().joined(separator: ", "))")
+                }
+                print()
+                let limits = policy.capabilities.resourceLimits
+                if limits.cpus != nil || limits.memoryBytes != nil || limits.maxProcesses != nil {
+                    print("Resource Limits:")
+                    if let cpus = limits.cpus {
+                        print("  CPUs: \(cpus)")
+                    }
+                    if let memory = limits.memoryBytes {
+                        print("  Memory: \(formatBytes(memory))")
+                    }
+                    if let maxProcs = limits.maxProcesses {
+                        print("  Max Processes: \(maxProcs)")
+                    }
+                }
+                print()
+                print("Sandbox:")
+                print("  Root: \(policy.sandbox.rootPath)")
+                print("  Working Directory: \(policy.sandbox.workingDirectory)")
+                if let hostname = policy.sandbox.hostname {
+                    print("  Hostname: \(hostname)")
+                }
+                if !policy.sandbox.mounts.isEmpty {
+                    print("  Mounts:")
+                    for mount in policy.sandbox.mounts {
+                        print("    \(mount.source) -> \(mount.destination) (\(mount.type.rawValue), \(mount.mode.rawValue))")
+                    }
+                }
+                if !policy.sandbox.environment.isEmpty {
+                    print("  Environment:")
+                    for (key, value) in policy.sandbox.environment.sorted(by: { $0.key < $1.key }) {
+                        print("    \(key)=\(value)")
+                    }
+                }
+            }
         }
         
-        private func profileDirectory() -> URL {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            return home.appendingPathComponent(".hops/profiles")
+        private func formatBytes(_ bytes: UInt64) -> String {
+            let kb = Double(bytes) / 1024.0
+            let mb = kb / 1024.0
+            let gb = mb / 1024.0
+            
+            if gb >= 1.0 {
+                return String(format: "%.1fGB", gb)
+            } else if mb >= 1.0 {
+                return String(format: "%.1fMB", mb)
+            } else if kb >= 1.0 {
+                return String(format: "%.1fKB", kb)
+            } else {
+                return "\(bytes)B"
+            }
         }
     }
     
@@ -159,6 +214,7 @@ extension ProfileCommand {
                 name = "\(name)"
                 version = "1.0.0"
                 description = "Restrictive sandbox profile with minimal permissions"
+                rootfs = "alpine-rootfs.ext4"
                 
                 [capabilities]
                 network = "disabled"
@@ -182,6 +238,7 @@ extension ProfileCommand {
                 name = "\(name)"
                 version = "1.0.0"
                 description = "Build environment with network access for package downloads"
+                rootfs = "alpine-rootfs.ext4"
                 
                 [capabilities]
                 network = "outbound"
@@ -205,6 +262,7 @@ extension ProfileCommand {
                 name = "\(name)"
                 version = "1.0.0"
                 description = "Full network access with restricted filesystem"
+                rootfs = "alpine-rootfs.ext4"
                 
                 [capabilities]
                 network = "full"
@@ -228,6 +286,7 @@ extension ProfileCommand {
                 name = "\(name)"
                 version = "1.0.0"
                 description = "Default sandbox profile"
+                rootfs = "alpine-rootfs.ext4"
                 
                 [capabilities]
                 network = "disabled"

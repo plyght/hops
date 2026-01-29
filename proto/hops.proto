@@ -4,7 +4,7 @@ package hops;
 
 service HopsService {
   rpc RunSandbox(RunRequest) returns (RunResponse);
-  rpc RunSandboxStreaming(RunRequest) returns (stream OutputChunk);
+  rpc RunSandboxStreaming(stream InputChunk) returns (stream OutputChunk);
   rpc StopSandbox(StopRequest) returns (StopResponse);
   rpc ListSandboxes(ListRequest) returns (ListResponse);
   rpc GetStatus(StatusRequest) returns (SandboxStatus);
@@ -17,6 +17,8 @@ message RunRequest {
   optional Policy inline_policy = 3;
   map<string, string> environment = 4;
   optional string working_directory = 5;
+  bool keep = 6;
+  bool allocate_tty = 7;
 }
 
 message RunResponse {
@@ -112,6 +114,18 @@ message ResourceUsage {
   double cpu_percent = 1;
   uint64 memory_bytes = 2;
   int32 process_count = 3;
+}
+
+message InputChunk {
+  string sandbox_id = 1;
+  InputType type = 2;
+  bytes data = 3;
+  RunRequest run_request = 4;
+}
+
+enum InputType {
+  INPUT_TYPE_RUN = 0;
+  INPUT_TYPE_STDIN = 1;
 }
 
 message OutputChunk {

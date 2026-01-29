@@ -7,6 +7,7 @@ actor HopsDaemon {
     private var containerService: ContainerService?
     private var isRunning = false
     private var startTime: Date?
+    private var activeSandboxCount: Int = 0
     
     init(socketPath: String? = nil) {
         if let socketPath = socketPath {
@@ -30,7 +31,7 @@ actor HopsDaemon {
         startTime = Date()
         
         do {
-            sandboxManager = try await SandboxManager()
+            sandboxManager = try await SandboxManager(daemon: self)
             print("Sandbox manager initialized")
             fflush(stdout)
         } catch let error as SandboxManagerError {
@@ -130,12 +131,21 @@ actor HopsDaemon {
     
     func getDaemonStatus() async -> DaemonStatusInfo {
         let pid = ProcessInfo.processInfo.processIdentifier
-        let activeSandboxCount = await sandboxManager?.listSandboxes().count ?? 0
         return DaemonStatusInfo(
             pid: pid,
             startTime: startTime ?? Date(),
             activeSandboxes: activeSandboxCount
         )
+    }
+    
+    func incrementActiveSandboxCount() {
+        activeSandboxCount += 1
+    }
+    
+    func decrementActiveSandboxCount() {
+        if activeSandboxCount > 0 {
+            activeSandboxCount -= 1
+        }
     }
 }
 

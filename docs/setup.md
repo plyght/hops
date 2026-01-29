@@ -4,10 +4,10 @@ Complete installation and configuration guide for Hops sandboxing system.
 
 ## Prerequisites
 
-- macOS 14+ (Sonoma or later)
-- Apple Silicon (M1/M2/M3)
+- macOS 26 (Sequoia) or later
+- Apple Silicon (M1/M2/M3/M4)
 - Xcode Command Line Tools
-- Swift 5.9+
+- Swift 6.0+
 - Root access for system-level installation
 
 ## Installation
@@ -190,14 +190,14 @@ Expected output:
 
 ### Option 2: Build Kernel and Initfs from Source
 
-If you need custom kernel configuration (e.g., enabling Landlock, custom modules), you can build from the Apple Containerization framework source.
+If you need custom kernel configuration, you can build from the Apple Containerization framework source.
 
 #### Prerequisites
 
-- **macOS 15+** (Sequoia or later)
+- **macOS 26+** (Sequoia or later)
 - **Xcode Command Line Tools**: `xcode-select --install`
 - **Swift 6.0+**: `swift --version`
-- **Cross-compilation toolchain**: Will be downloaded automatically
+- **Cross-compilation toolchain**: Downloaded automatically
 - **Disk space**: ~5 GB for build artifacts
 - **Time**: ~30-45 minutes on Apple Silicon
 
@@ -473,7 +473,7 @@ Verify macOS version:
 sw_vers
 ```
 
-Requires macOS 14+ on Apple Silicon.
+Requires macOS 26+ on Apple Silicon.
 
 Check framework:
 ```bash

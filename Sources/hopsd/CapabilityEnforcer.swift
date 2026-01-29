@@ -2,6 +2,7 @@ import Foundation
 import HopsCore
 import Containerization
 import ContainerizationExtras
+import ContainerizationOCI
 import Logging
 
 enum CapabilityEnforcer {
@@ -10,7 +11,9 @@ enum CapabilityEnforcer {
         policy: Policy,
         command: [String],
         stdout: (any Writer)? = nil,
-        stderr: (any Writer)? = nil
+        stderr: (any Writer)? = nil,
+        stdin: (any ReaderStream)? = nil,
+        allocateTty: Bool = false
     ) {
         let capabilities = policy.capabilities
         let sandbox = policy.sandbox
@@ -23,12 +26,23 @@ enum CapabilityEnforcer {
             config.process.environmentVariables.append("\(key)=\(value)")
         }
         
-        if let stdout = stdout {
-            config.process.stdout = stdout
-        }
-        
-        if let stderr = stderr {
-            config.process.stderr = stderr
+        if allocateTty {
+            config.process.terminal = true
+            if let stdin = stdin {
+                config.process.stdin = stdin
+            }
+        } else {
+            if let stdout = stdout {
+                config.process.stdout = stdout
+            }
+            
+            if let stderr = stderr {
+                config.process.stderr = stderr
+            }
+            
+            if let stdin = stdin {
+                config.process.stdin = stdin
+            }
         }
         
         configureResources(config: &config, limits: capabilities.resourceLimits)
@@ -47,6 +61,12 @@ enum CapabilityEnforcer {
         
         if let memory = limits.memoryBytes {
             config.memoryInBytes = memory
+        }
+        
+        if let maxProcs = limits.maxProcesses {
+            config.process.rlimits.append(
+                POSIXRlimit(type: "RLIMIT_NPROC", hard: UInt64(maxProcs), soft: UInt64(maxProcs))
+            )
         }
     }
     
@@ -106,7 +126,7 @@ enum CapabilityEnforcer {
     private static func translateMount(
         mountConfig: MountConfig,
         capabilities: CapabilityGrant
-    ) -> Mount? {
+    ) -> Containerization.Mount? {
         let isDenied = capabilities.deniedPaths.contains(mountConfig.destination)
         
         if isDenied {
@@ -116,22 +136,37 @@ enum CapabilityEnforcer {
         switch mountConfig.type {
         case .bind:
             let options = mountConfig.mode == .readOnly ? ["ro"] : []
-            return Mount.share(
+            return Containerization.Mount.share(
                 source: mountConfig.source,
                 destination: mountConfig.destination,
                 options: options
             )
             
         case .tmpfs:
-            return Mount.any(
+            return Containerization.Mount.any(
                 type: "tmpfs",
                 source: "tmpfs",
                 destination: mountConfig.destination
             )
             
+        case .overlay:
+            guard let lowerDir = mountConfig.overlayLowerDir,
+                  let upperDir = mountConfig.overlayUpperDir,
+                  let workDir = mountConfig.overlayWorkDir else {
+                return nil
+            }
+            
+            let overlayOptions = "lowerdir=\(lowerDir),upperdir=\(upperDir),workdir=\(workDir)"
+            return Containerization.Mount.any(
+                type: "overlay",
+                source: "overlay",
+                destination: mountConfig.destination,
+                options: [overlayOptions]
+            )
+            
         case .devtmpfs, .proc, .sysfs:
             let options = mountConfig.mode == .readOnly ? ["ro"] : []
-            return Mount.share(
+            return Containerization.Mount.share(
                 source: mountConfig.source,
                 destination: mountConfig.destination,
                 options: options

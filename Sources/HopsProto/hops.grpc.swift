@@ -22,10 +22,9 @@ public protocol Hops_HopsServiceClientProtocol: GRPCClient {
   ) -> UnaryCall<Hops_RunRequest, Hops_RunResponse>
 
   func runSandboxStreaming(
-    _ request: Hops_RunRequest,
     callOptions: CallOptions?,
     handler: @escaping (Hops_OutputChunk) -> Void
-  ) -> ServerStreamingCall<Hops_RunRequest, Hops_OutputChunk>
+  ) -> BidirectionalStreamingCall<Hops_InputChunk, Hops_OutputChunk>
 
   func stopSandbox(
     _ request: Hops_StopRequest,
@@ -71,21 +70,21 @@ extension Hops_HopsServiceClientProtocol {
     )
   }
 
-  /// Server streaming call to RunSandboxStreaming
+  /// Bidirectional streaming call to RunSandboxStreaming
+  ///
+  /// Callers should use the `send` method on the returned object to send messages
+  /// to the server. The caller should send an `.end` after the final message has been sent.
   ///
   /// - Parameters:
-  ///   - request: Request to send to RunSandboxStreaming.
   ///   - callOptions: Call options.
   ///   - handler: A closure called when each response is received from the server.
-  /// - Returns: A `ServerStreamingCall` with futures for the metadata and status.
+  /// - Returns: A `ClientStreamingCall` with futures for the metadata and status.
   public func runSandboxStreaming(
-    _ request: Hops_RunRequest,
     callOptions: CallOptions? = nil,
     handler: @escaping (Hops_OutputChunk) -> Void
-  ) -> ServerStreamingCall<Hops_RunRequest, Hops_OutputChunk> {
-    return self.makeServerStreamingCall(
+  ) -> BidirectionalStreamingCall<Hops_InputChunk, Hops_OutputChunk> {
+    return self.makeBidirectionalStreamingCall(
       path: Hops_HopsServiceClientMetadata.Methods.runSandboxStreaming.path,
-      request: request,
       callOptions: callOptions ?? self.defaultCallOptions,
       interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? [],
       handler: handler
@@ -233,9 +232,8 @@ public protocol Hops_HopsServiceAsyncClientProtocol: GRPCClient {
   ) -> GRPCAsyncUnaryCall<Hops_RunRequest, Hops_RunResponse>
 
   func makeRunSandboxStreamingCall(
-    _ request: Hops_RunRequest,
     callOptions: CallOptions?
-  ) -> GRPCAsyncServerStreamingCall<Hops_RunRequest, Hops_OutputChunk>
+  ) -> GRPCAsyncBidirectionalStreamingCall<Hops_InputChunk, Hops_OutputChunk>
 
   func makeStopSandboxCall(
     _ request: Hops_StopRequest,
@@ -281,12 +279,10 @@ extension Hops_HopsServiceAsyncClientProtocol {
   }
 
   public func makeRunSandboxStreamingCall(
-    _ request: Hops_RunRequest,
     callOptions: CallOptions? = nil
-  ) -> GRPCAsyncServerStreamingCall<Hops_RunRequest, Hops_OutputChunk> {
-    return self.makeAsyncServerStreamingCall(
+  ) -> GRPCAsyncBidirectionalStreamingCall<Hops_InputChunk, Hops_OutputChunk> {
+    return self.makeAsyncBidirectionalStreamingCall(
       path: Hops_HopsServiceClientMetadata.Methods.runSandboxStreaming.path,
-      request: request,
       callOptions: callOptions ?? self.defaultCallOptions,
       interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? []
     )
@@ -355,13 +351,25 @@ extension Hops_HopsServiceAsyncClientProtocol {
     )
   }
 
-  public func runSandboxStreaming(
-    _ request: Hops_RunRequest,
+  public func runSandboxStreaming<RequestStream>(
+    _ requests: RequestStream,
     callOptions: CallOptions? = nil
-  ) -> GRPCAsyncResponseStream<Hops_OutputChunk> {
-    return self.performAsyncServerStreamingCall(
+  ) -> GRPCAsyncResponseStream<Hops_OutputChunk> where RequestStream: Sequence, RequestStream.Element == Hops_InputChunk {
+    return self.performAsyncBidirectionalStreamingCall(
       path: Hops_HopsServiceClientMetadata.Methods.runSandboxStreaming.path,
-      request: request,
+      requests: requests,
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? []
+    )
+  }
+
+  public func runSandboxStreaming<RequestStream>(
+    _ requests: RequestStream,
+    callOptions: CallOptions? = nil
+  ) -> GRPCAsyncResponseStream<Hops_OutputChunk> where RequestStream: AsyncSequence & Sendable, RequestStream.Element == Hops_InputChunk {
+    return self.performAsyncBidirectionalStreamingCall(
+      path: Hops_HopsServiceClientMetadata.Methods.runSandboxStreaming.path,
+      requests: requests,
       callOptions: callOptions ?? self.defaultCallOptions,
       interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? []
     )
@@ -439,7 +447,7 @@ public protocol Hops_HopsServiceClientInterceptorFactoryProtocol: Sendable {
   func makeRunSandboxInterceptors() -> [ClientInterceptor<Hops_RunRequest, Hops_RunResponse>]
 
   /// - Returns: Interceptors to use when invoking 'runSandboxStreaming'.
-  func makeRunSandboxStreamingInterceptors() -> [ClientInterceptor<Hops_RunRequest, Hops_OutputChunk>]
+  func makeRunSandboxStreamingInterceptors() -> [ClientInterceptor<Hops_InputChunk, Hops_OutputChunk>]
 
   /// - Returns: Interceptors to use when invoking 'stopSandbox'.
   func makeStopSandboxInterceptors() -> [ClientInterceptor<Hops_StopRequest, Hops_StopResponse>]
@@ -478,7 +486,7 @@ public enum Hops_HopsServiceClientMetadata {
     public static let runSandboxStreaming = GRPCMethodDescriptor(
       name: "RunSandboxStreaming",
       path: "/hops.HopsService/RunSandboxStreaming",
-      type: GRPCCallType.serverStreaming
+      type: GRPCCallType.bidirectionalStreaming
     )
 
     public static let stopSandbox = GRPCMethodDescriptor(
@@ -513,7 +521,7 @@ public protocol Hops_HopsServiceProvider: CallHandlerProvider {
 
   func runSandbox(request: Hops_RunRequest, context: StatusOnlyCallContext) -> EventLoopFuture<Hops_RunResponse>
 
-  func runSandboxStreaming(request: Hops_RunRequest, context: StreamingResponseCallContext<Hops_OutputChunk>) -> EventLoopFuture<GRPCStatus>
+  func runSandboxStreaming(context: StreamingResponseCallContext<Hops_OutputChunk>) -> EventLoopFuture<(StreamEvent<Hops_InputChunk>) -> Void>
 
   func stopSandbox(request: Hops_StopRequest, context: StatusOnlyCallContext) -> EventLoopFuture<Hops_StopResponse>
 
@@ -546,12 +554,12 @@ extension Hops_HopsServiceProvider {
       )
 
     case "RunSandboxStreaming":
-      return ServerStreamingServerHandler(
+      return BidirectionalStreamingServerHandler(
         context: context,
-        requestDeserializer: ProtobufDeserializer<Hops_RunRequest>(),
+        requestDeserializer: ProtobufDeserializer<Hops_InputChunk>(),
         responseSerializer: ProtobufSerializer<Hops_OutputChunk>(),
         interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? [],
-        userFunction: self.runSandboxStreaming(request:context:)
+        observerFactory: self.runSandboxStreaming(context:)
       )
 
     case "StopSandbox":
@@ -608,7 +616,7 @@ public protocol Hops_HopsServiceAsyncProvider: CallHandlerProvider, Sendable {
   ) async throws -> Hops_RunResponse
 
   func runSandboxStreaming(
-    request: Hops_RunRequest,
+    requestStream: GRPCAsyncRequestStream<Hops_InputChunk>,
     responseStream: GRPCAsyncResponseStreamWriter<Hops_OutputChunk>,
     context: GRPCAsyncServerCallContext
   ) async throws
@@ -665,10 +673,10 @@ extension Hops_HopsServiceAsyncProvider {
     case "RunSandboxStreaming":
       return GRPCAsyncServerHandler(
         context: context,
-        requestDeserializer: ProtobufDeserializer<Hops_RunRequest>(),
+        requestDeserializer: ProtobufDeserializer<Hops_InputChunk>(),
         responseSerializer: ProtobufSerializer<Hops_OutputChunk>(),
         interceptors: self.interceptors?.makeRunSandboxStreamingInterceptors() ?? [],
-        wrapping: { try await self.runSandboxStreaming(request: $0, responseStream: $1, context: $2) }
+        wrapping: { try await self.runSandboxStreaming(requestStream: $0, responseStream: $1, context: $2) }
       )
 
     case "StopSandbox":
@@ -721,7 +729,7 @@ public protocol Hops_HopsServiceServerInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when handling 'runSandboxStreaming'.
   ///   Defaults to calling `self.makeInterceptors()`.
-  func makeRunSandboxStreamingInterceptors() -> [ServerInterceptor<Hops_RunRequest, Hops_OutputChunk>]
+  func makeRunSandboxStreamingInterceptors() -> [ServerInterceptor<Hops_InputChunk, Hops_OutputChunk>]
 
   /// - Returns: Interceptors to use when handling 'stopSandbox'.
   ///   Defaults to calling `self.makeInterceptors()`.
@@ -764,7 +772,7 @@ public enum Hops_HopsServiceServerMetadata {
     public static let runSandboxStreaming = GRPCMethodDescriptor(
       name: "RunSandboxStreaming",
       path: "/hops.HopsService/RunSandboxStreaming",
-      type: GRPCCallType.serverStreaming
+      type: GRPCCallType.bidirectionalStreaming
     )
 
     public static let stopSandbox = GRPCMethodDescriptor(

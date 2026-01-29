@@ -109,6 +109,40 @@ public enum Hops_NetworkAccess: SwiftProtobuf.Enum, Swift.CaseIterable {
 
 }
 
+public enum Hops_InputType: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case run // = 0
+  case stdin // = 1
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .run
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .run
+    case 1: self = .stdin
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .run: return 0
+    case .stdin: return 1
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Hops_InputType] = [
+    .run,
+    .stdin,
+  ]
+
+}
+
 public enum Hops_OutputType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case stdout // = 0
@@ -182,6 +216,10 @@ public struct Hops_RunRequest: Sendable {
   public var hasWorkingDirectory: Bool {return self._workingDirectory != nil}
   /// Clears the value of `workingDirectory`. Subsequent reads from it will return its default value.
   public mutating func clearWorkingDirectory() {self._workingDirectory = nil}
+
+  public var keep: Bool = false
+
+  public var allocateTty: Bool = false
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -485,6 +523,42 @@ public struct Hops_ResourceUsage: Sendable {
   public init() {}
 }
 
+public struct Hops_InputChunk: @unchecked Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var sandboxID: String {
+    get {return _storage._sandboxID}
+    set {_uniqueStorage()._sandboxID = newValue}
+  }
+
+  public var type: Hops_InputType {
+    get {return _storage._type}
+    set {_uniqueStorage()._type = newValue}
+  }
+
+  public var data: Data {
+    get {return _storage._data}
+    set {_uniqueStorage()._data = newValue}
+  }
+
+  public var runRequest: Hops_RunRequest {
+    get {return _storage._runRequest ?? Hops_RunRequest()}
+    set {_uniqueStorage()._runRequest = newValue}
+  }
+  /// Returns true if `runRequest` has been explicitly set.
+  public var hasRunRequest: Bool {return _storage._runRequest != nil}
+  /// Clears the value of `runRequest`. Subsequent reads from it will return its default value.
+  public mutating func clearRunRequest() {_uniqueStorage()._runRequest = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _storage = _StorageClass.defaultInstance
+}
+
 public struct Hops_OutputChunk: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -552,13 +626,17 @@ extension Hops_NetworkAccess: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0NETWORK_ACCESS_DISABLED\0\u{1}NETWORK_ACCESS_OUTBOUND\0\u{1}NETWORK_ACCESS_LOOPBACK\0\u{1}NETWORK_ACCESS_FULL\0")
 }
 
+extension Hops_InputType: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0INPUT_TYPE_RUN\0\u{1}INPUT_TYPE_STDIN\0")
+}
+
 extension Hops_OutputType: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0OUTPUT_TYPE_STDOUT\0\u{1}OUTPUT_TYPE_STDERR\0\u{1}OUTPUT_TYPE_EXIT\0")
 }
 
 extension Hops_RunRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}command\0\u{3}policy_path\0\u{3}inline_policy\0\u{1}environment\0\u{3}working_directory\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}command\0\u{3}policy_path\0\u{3}inline_policy\0\u{1}environment\0\u{3}working_directory\0\u{1}keep\0\u{3}allocate_tty\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -571,6 +649,8 @@ extension Hops_RunRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
       case 3: try { try decoder.decodeSingularMessageField(value: &self._inlinePolicy) }()
       case 4: try { try decoder.decodeMapField(fieldType: SwiftProtobuf._ProtobufMap<SwiftProtobuf.ProtobufString,SwiftProtobuf.ProtobufString>.self, value: &self.environment) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self._workingDirectory) }()
+      case 6: try { try decoder.decodeSingularBoolField(value: &self.keep) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self.allocateTty) }()
       default: break
       }
     }
@@ -596,6 +676,12 @@ extension Hops_RunRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
     try { if let v = self._workingDirectory {
       try visitor.visitSingularStringField(value: v, fieldNumber: 5)
     } }()
+    if self.keep != false {
+      try visitor.visitSingularBoolField(value: self.keep, fieldNumber: 6)
+    }
+    if self.allocateTty != false {
+      try visitor.visitSingularBoolField(value: self.allocateTty, fieldNumber: 7)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -605,6 +691,8 @@ extension Hops_RunRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
     if lhs._inlinePolicy != rhs._inlinePolicy {return false}
     if lhs.environment != rhs.environment {return false}
     if lhs._workingDirectory != rhs._workingDirectory {return false}
+    if lhs.keep != rhs.keep {return false}
+    if lhs.allocateTty != rhs.allocateTty {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1165,6 +1253,97 @@ extension Hops_ResourceUsage: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
     if lhs.cpuPercent != rhs.cpuPercent {return false}
     if lhs.memoryBytes != rhs.memoryBytes {return false}
     if lhs.processCount != rhs.processCount {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Hops_InputChunk: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".InputChunk"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}sandbox_id\0\u{1}type\0\u{1}data\0\u{3}run_request\0")
+
+  fileprivate class _StorageClass {
+    var _sandboxID: String = String()
+    var _type: Hops_InputType = .run
+    var _data: Data = Data()
+    var _runRequest: Hops_RunRequest? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _sandboxID = source._sandboxID
+      _type = source._type
+      _data = source._data
+      _runRequest = source._runRequest
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._sandboxID) }()
+        case 2: try { try decoder.decodeSingularEnumField(value: &_storage._type) }()
+        case 3: try { try decoder.decodeSingularBytesField(value: &_storage._data) }()
+        case 4: try { try decoder.decodeSingularMessageField(value: &_storage._runRequest) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._sandboxID.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._sandboxID, fieldNumber: 1)
+      }
+      if _storage._type != .run {
+        try visitor.visitSingularEnumField(value: _storage._type, fieldNumber: 2)
+      }
+      if !_storage._data.isEmpty {
+        try visitor.visitSingularBytesField(value: _storage._data, fieldNumber: 3)
+      }
+      try { if let v = _storage._runRequest {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+      } }()
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Hops_InputChunk, rhs: Hops_InputChunk) -> Bool {
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._sandboxID != rhs_storage._sandboxID {return false}
+        if _storage._type != rhs_storage._type {return false}
+        if _storage._data != rhs_storage._data {return false}
+        if _storage._runRequest != rhs_storage._runRequest {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

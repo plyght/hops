@@ -514,4 +514,43 @@ final class PolicyParserTests: XCTestCase {
         XCTAssertTrue(policy.capabilities.filesystem.contains(.read))
         XCTAssertTrue(policy.capabilities.filesystem.contains(.write))
     }
+    
+    func testParseRootfsFieldRelativePath() throws {
+        let toml = """
+        name = "test"
+        rootfs = "alpine-rootfs.ext4"
+        """
+        
+        let policy = try parser.parse(fromString: toml)
+        XCTAssertEqual(policy.rootfs, "alpine-rootfs.ext4")
+    }
+    
+    func testParseRootfsFieldAbsolutePath() throws {
+        let toml = """
+        name = "test"
+        rootfs = "/custom/path/to/rootfs.ext4"
+        """
+        
+        let policy = try parser.parse(fromString: toml)
+        XCTAssertEqual(policy.rootfs, "/custom/path/to/rootfs.ext4")
+    }
+    
+    func testParseRootfsFieldTildePath() throws {
+        let toml = """
+        name = "test"
+        rootfs = "~/.hops/custom-rootfs.ext4"
+        """
+        
+        let policy = try parser.parse(fromString: toml)
+        XCTAssertEqual(policy.rootfs, "~/.hops/custom-rootfs.ext4")
+    }
+    
+    func testParseRootfsFieldOptional() throws {
+        let toml = """
+        name = "test"
+        """
+        
+        let policy = try parser.parse(fromString: toml)
+        XCTAssertNil(policy.rootfs)
+    }
 }

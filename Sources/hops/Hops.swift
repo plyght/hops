@@ -20,7 +20,8 @@ struct Hops: AsyncParsableCommand {
         subcommands: [
             RunCommand.self,
             ProfileCommand.self,
-            SystemCommand.self
+            SystemCommand.self,
+            RootfsCommand.self
         ]
     )
 }

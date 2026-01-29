@@ -78,16 +78,42 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             }
             
             let homeDir = FileManager.default.homeDirectoryForCurrentUser
-            let initfsPath = homeDir
+            let defaultRootfs = homeDir
                 .appendingPathComponent(".hops")
-                .appendingPathComponent("initfs")
-            let rootfs = initfsPath
+                .appendingPathComponent("alpine-rootfs.ext4")
+            
+            let rootfs: URL
+            if let ociImage = policy.ociImage {
+                let imageManager = OCIImageManager()
+                rootfs = try await imageManager.resolveImage(ociImage)
+                
+                if let imageConfig = try await imageManager.getImageConfig(ociImage) {
+                    policy = applyOCIConfig(policy: policy, config: imageConfig)
+                }
+            } else if let policyRootfs = policy.rootfs {
+                if policyRootfs.hasPrefix("/") || policyRootfs.hasPrefix("~") {
+                    let expandedPath = NSString(string: policyRootfs).expandingTildeInPath
+                    rootfs = URL(fileURLWithPath: expandedPath)
+                } else {
+                    rootfs = homeDir
+                        .appendingPathComponent(".hops")
+                        .appendingPathComponent(policyRootfs)
+                }
+            } else {
+                rootfs = defaultRootfs
+            }
+            
+            guard FileManager.default.fileExists(atPath: rootfs.path) else {
+                throw ContainerServiceError.rootfsNotFound(rootfs.path)
+            }
             
             let status = try await manager.runSandbox(
                 id: sandboxId,
                 policy: policy,
                 command: request.command,
-                rootfs: rootfs
+                rootfs: rootfs,
+                keep: request.keep,
+                allocateTty: request.allocateTty
             )
             
             var response = Hops_RunResponse()
@@ -107,10 +133,17 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
     }
     
     nonisolated func runSandboxStreaming(
-        request: Hops_RunRequest,
+        requestStream: GRPCAsyncRequestStream<Hops_InputChunk>,
         responseStream: GRPCAsyncResponseStreamWriter<Hops_OutputChunk>,
         context: GRPCAsyncServerCallContext
     ) async throws {
+        guard let firstChunk = try await requestStream.first(where: { $0.type == .run }) else {
+            return
+        }
+        guard firstChunk.hasRunRequest else {
+            return
+        }
+        let request = firstChunk.runRequest
         guard let manager = await sandboxManager else {
             throw ContainerServiceError.managerNotAvailable
         }
@@ -123,16 +156,42 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         }
         
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let initfsPath = homeDir
+        let defaultRootfs = homeDir
             .appendingPathComponent(".hops")
-            .appendingPathComponent("initfs")
-        let rootfs = initfsPath
+            .appendingPathComponent("alpine-rootfs.ext4")
+        
+        let rootfs: URL
+        if let ociImage = policy.ociImage {
+            let imageManager = OCIImageManager()
+            rootfs = try await imageManager.resolveImage(ociImage)
+            
+            if let imageConfig = try await imageManager.getImageConfig(ociImage) {
+                policy = applyOCIConfig(policy: policy, config: imageConfig)
+            }
+        } else if let policyRootfs = policy.rootfs {
+            if policyRootfs.hasPrefix("/") || policyRootfs.hasPrefix("~") {
+                let expandedPath = NSString(string: policyRootfs).expandingTildeInPath
+                rootfs = URL(fileURLWithPath: expandedPath)
+            } else {
+                rootfs = homeDir
+                    .appendingPathComponent(".hops")
+                    .appendingPathComponent(policyRootfs)
+            }
+        } else {
+            rootfs = defaultRootfs
+        }
+        
+        guard FileManager.default.fileExists(atPath: rootfs.path) else {
+            throw ContainerServiceError.rootfsNotFound(rootfs.path)
+        }
         
         let stream = await manager.runSandboxStreaming(
             id: sandboxId,
             policy: policy,
             command: request.command,
-            rootfs: rootfs
+            rootfs: rootfs,
+            keep: request.keep,
+            allocateTty: request.allocateTty
         )
         
         for try await chunk in stream {
@@ -227,6 +286,14 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             protoStatus.command = info?.command ?? []
             protoStatus.startTime = Int64(status.startedAt?.timeIntervalSince1970 ?? 0)
             
+            if let stats = try? await manager.getStatistics(id: request.sandboxID) {
+                var resourceUsage = Hops_ResourceUsage()
+                resourceUsage.memoryBytes = stats.memoryUsageBytes
+                resourceUsage.cpuPercent = 0.0
+                resourceUsage.processCount = 0
+                protoStatus.resourceUsage = resourceUsage
+            }
+            
             return protoStatus
         } catch {
             var status = Hops_SandboxStatus()
@@ -314,6 +381,25 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         return value * multiplier
     }
     
+    private nonisolated func applyOCIConfig(policy: Policy, config: OCIImageConfig) -> Policy {
+        var updatedPolicy = policy
+        
+        if let env = config.config.Env {
+            for envVar in env {
+                let parts = envVar.split(separator: "=", maxSplits: 1)
+                if parts.count == 2 {
+                    updatedPolicy.sandbox.environment[String(parts[0])] = String(parts[1])
+                }
+            }
+        }
+        
+        if let workingDir = config.config.WorkingDir, !workingDir.isEmpty {
+            updatedPolicy.sandbox.workingDirectory = workingDir
+        }
+        
+        return updatedPolicy
+    }
+    
     nonisolated func getDaemonStatus(
         request: Hops_DaemonStatusRequest,
         context: GRPCAsyncServerCallContext
@@ -339,6 +425,26 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
 
 enum ContainerServiceError: Error {
     case managerNotAvailable
+    case rootfsNotFound(String)
+}
+
+extension ContainerServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .managerNotAvailable:
+            return "Sandbox manager not available"
+        case .rootfsNotFound(let path):
+            return """
+            Rootfs image not found: \(path)
+            
+            Available rootfs images should be in ~/.hops/ or ~/.hops/rootfs/ directory.
+            Example: ~/.hops/alpine-rootfs.ext4, ~/.hops/rootfs/ubuntu.ext4
+            
+            Create a rootfs image with: hops rootfs create alpine
+            Or specify a different rootfs in the policy TOML file.
+            """
+        }
+    }
 }
 
 public struct SandboxInfo: Codable, Sendable {

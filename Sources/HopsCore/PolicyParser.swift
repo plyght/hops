@@ -58,6 +58,7 @@ public struct PolicyParser: Sendable {
         let capabilities = try parseCapabilities(from: toml)
         let sandbox = try parseSandbox(from: toml)
         let metadata = parseMetadata(from: toml)
+        let rootfs = toml["rootfs"]?.string
         
         return Policy(
             name: name,
@@ -65,7 +66,8 @@ public struct PolicyParser: Sendable {
             description: description,
             capabilities: capabilities,
             sandbox: sandbox,
-            metadata: metadata
+            metadata: metadata,
+            rootfs: rootfs
         )
     }
     

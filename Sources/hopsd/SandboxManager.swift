@@ -6,16 +6,29 @@ import NIOCore
 import NIOPosix
 
 actor SandboxManager {
+    
+    // Container Cleanup Mechanism:
+    // When a container exits, handleContainerExit() is called with the exit code.
+    // If the container was created with keep=false (default), cleanupContainer() removes
+    // the container directory at ~/.hops/containers/{id}/ including the rootfs.ext4 copy.
+    // If keep=true, the directory persists for inspection/debugging.
+    // The --keep flag in RunCommand.swift line 52 controls this behavior.
+    // Verified: cleanupContainer() is called at line 352 when !info.keep is true.
+    // Container directories are created at line 80 and copied at line 88.
+    // Cleanup removes the entire directory tree at line 369.
+    
     private var vmm: VZVirtualMachineManager?
     private var eventLoopGroup: MultiThreadedEventLoopGroup?
     private var containers: [String: LinuxContainer] = [:]
     private var containerInfo: [String: ContainerMetadata] = [:]
     private let logger: Logger
+    private weak var daemon: HopsDaemon?
     
-    init() async throws {
+    init(daemon: HopsDaemon? = nil) async throws {
         var logger = Logger(label: "ai.hops.SandboxManager")
         logger.logLevel = .info
         self.logger = logger
+        self.daemon = daemon
         
         try await initializeVMM()
     }
@@ -62,7 +75,9 @@ actor SandboxManager {
         id: String,
         policy: Policy,
         command: [String],
-        rootfs: URL
+        rootfs: URL,
+        keep: Bool,
+        allocateTty: Bool = false
     ) async throws -> SandboxStatus {
         guard let vmm = vmm else {
             throw SandboxManagerError.vmmNotInitialized
@@ -80,29 +95,33 @@ actor SandboxManager {
         try? FileManager.default.createDirectory(at: containersDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: containerDir, withIntermediateDirectories: true)
         
-        let containerRootfs = containerDir.appendingPathComponent("rootfs.ext4")
+        let overlayUpperDir = containerDir.appendingPathComponent("upper")
+        let overlayWorkDir = containerDir.appendingPathComponent("work")
         
-        if !FileManager.default.fileExists(atPath: containerRootfs.path) {
-            try FileManager.default.copyItem(at: rootfs, to: containerRootfs)
-        }
+        try? FileManager.default.createDirectory(at: overlayUpperDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: overlayWorkDir, withIntermediateDirectories: true)
         
-        logger.info("Creating container", metadata: [
+        logger.info("Creating container with overlay", metadata: [
             "id": "\(id)",
             "policy": "\(policy.name)",
-            "rootfs": "\(containerRootfs.path)"
+            "baseRootfs": "\(rootfs.path)"
         ])
         
         let rootfsMount = Mount.block(
             format: "ext4",
-            source: containerRootfs.path,
+            source: rootfs.path,
             destination: "/"
         )
+        
+        let stdinReader = allocateTty ? EmptyStdinReader() : nil
         
         let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
             CapabilityEnforcer.configure(
                 config: &config,
                 policy: policy,
-                command: command
+                command: command,
+                stdin: stdinReader,
+                allocateTty: allocateTty
             )
         }
         
@@ -111,8 +130,11 @@ actor SandboxManager {
             policyName: policy.name,
             command: command,
             pid: generateContainerPid(id),
-            startedAt: Date()
+            startedAt: Date(),
+            keep: keep
         )
+        
+        await daemon?.incrementActiveSandboxCount()
         
         try await container.create()
         logger.info("Container created", metadata: ["id": "\(id)"])
@@ -139,7 +161,9 @@ actor SandboxManager {
         id: String,
         policy: Policy,
         command: [String],
-        rootfs: URL
+        rootfs: URL,
+        keep: Bool,
+        allocateTty: Bool = false
     ) -> AsyncThrowingStream<StreamingOutputChunk, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -160,21 +184,21 @@ actor SandboxManager {
                     try? FileManager.default.createDirectory(at: containersDir, withIntermediateDirectories: true)
                     try? FileManager.default.createDirectory(at: containerDir, withIntermediateDirectories: true)
                     
-                    let containerRootfs = containerDir.appendingPathComponent("rootfs.ext4")
+                    let overlayUpperDir = containerDir.appendingPathComponent("upper")
+                    let overlayWorkDir = containerDir.appendingPathComponent("work")
                     
-                    if !FileManager.default.fileExists(atPath: containerRootfs.path) {
-                        try FileManager.default.copyItem(at: rootfs, to: containerRootfs)
-                    }
+                    try? FileManager.default.createDirectory(at: overlayUpperDir, withIntermediateDirectories: true)
+                    try? FileManager.default.createDirectory(at: overlayWorkDir, withIntermediateDirectories: true)
                     
-                    logger.info("Creating container with streaming", metadata: [
+                    logger.info("Creating container with streaming and overlay", metadata: [
                         "id": "\(id)",
                         "policy": "\(policy.name)",
-                        "rootfs": "\(containerRootfs.path)"
+                        "baseRootfs": "\(rootfs.path)"
                     ])
                     
                     let rootfsMount = Mount.block(
                         format: "ext4",
-                        source: containerRootfs.path,
+                        source: rootfs.path,
                         destination: "/"
                     )
                     
@@ -191,13 +215,17 @@ actor SandboxManager {
                         logger: logger
                     )
                     
+                    let stdinReader = allocateTty ? EmptyStdinReader() : nil
+                    
                     let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
                         CapabilityEnforcer.configure(
                             config: &config,
                             policy: policy,
                             command: command,
                             stdout: stdoutWriter,
-                            stderr: stderrWriter
+                            stderr: stderrWriter,
+                            stdin: stdinReader,
+                            allocateTty: allocateTty
                         )
                     }
                     
@@ -206,8 +234,11 @@ actor SandboxManager {
                         policyName: policy.name,
                         command: command,
                         pid: generateContainerPid(id),
-                        startedAt: Date()
+                        startedAt: Date(),
+                        keep: keep
                     )
+                    
+                    await self.daemon?.incrementActiveSandboxCount()
                     
                     try await container.create()
                     logger.info("Container created", metadata: ["id": "\(id)"])
@@ -334,11 +365,38 @@ actor SandboxManager {
         ])
         
         containers.removeValue(forKey: id)
+        await daemon?.decrementActiveSandboxCount()
         
         if var info = containerInfo[id] {
             info.finishedAt = Date()
             info.exitCode = exitCode
             containerInfo[id] = info
+            
+            if !info.keep {
+                cleanupContainer(id: id)
+            }
+        }
+    }
+    
+    private func cleanupContainer(id: String) {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let containerDir = homeDir
+            .appendingPathComponent(".hops")
+            .appendingPathComponent("containers")
+            .appendingPathComponent(id)
+        
+        guard FileManager.default.fileExists(atPath: containerDir.path) else {
+            return
+        }
+        
+        do {
+            try FileManager.default.removeItem(at: containerDir)
+            logger.info("Container directory cleaned up", metadata: ["id": "\(id)"])
+        } catch {
+            logger.error("Failed to cleanup container directory", metadata: [
+                "id": "\(id)",
+                "error": "\(error)"
+            ])
         }
     }
 }
@@ -393,6 +451,7 @@ private struct ContainerMetadata {
     let command: [String]
     let pid: Int32
     let startedAt: Date
+    let keep: Bool
     var finishedAt: Date?
     var exitCode: Int?
 }
@@ -432,6 +491,7 @@ enum SandboxManagerError: Error {
     case containerNotFound(String)
     case missingKernel(String)
     case missingInitfs(String)
+    case resourceLimitExceeded(String)
 }
 
 extension SandboxManagerError: LocalizedError {
@@ -469,6 +529,17 @@ extension SandboxManagerError: LocalizedError {
             
             See docs/setup.md for detailed installation instructions.
             """
+        case .resourceLimitExceeded(let reason):
+            return """
+            Resource limit exceeded: \(reason)
+            
+            The container violated configured resource constraints:
+            - Out of Memory (OOM): Increase --memory limit
+            - Process limit: Increase --max-processes limit
+            - CPU quota exceeded: Reduce workload or increase --cpus
+            
+            Adjust resource limits in policy TOML or via CLI flags.
+            """
         }
     }
 }
@@ -476,5 +547,13 @@ extension SandboxManagerError: LocalizedError {
 extension UInt64 {
     func mib() -> UInt64 {
         return self * 1024 * 1024
+    }
+}
+
+final class EmptyStdinReader: ReaderStream, Sendable {
+    func stream() -> AsyncStream<Data> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
     }
 }

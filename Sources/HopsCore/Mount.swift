@@ -6,6 +6,7 @@ public enum MountType: String, Codable, Sendable {
     case devtmpfs
     case proc
     case sysfs
+    case overlay
 }
 
 public enum MountMode: String, Codable, Sendable {
@@ -19,19 +20,28 @@ public struct MountConfig: Codable, Sendable, Equatable {
     public var type: MountType
     public var mode: MountMode
     public var options: [String]
+    public var overlayLowerDir: String?
+    public var overlayUpperDir: String?
+    public var overlayWorkDir: String?
     
     public init(
         source: String,
         destination: String,
         type: MountType,
         mode: MountMode = .readOnly,
-        options: [String] = []
+        options: [String] = [],
+        overlayLowerDir: String? = nil,
+        overlayUpperDir: String? = nil,
+        overlayWorkDir: String? = nil
     ) {
         self.source = source
         self.destination = destination
         self.type = type
         self.mode = mode
         self.options = options
+        self.overlayLowerDir = overlayLowerDir
+        self.overlayUpperDir = overlayUpperDir
+        self.overlayWorkDir = overlayWorkDir
     }
     
     public static func bind(
@@ -56,6 +66,24 @@ public struct MountConfig: Codable, Sendable, Equatable {
             type: .tmpfs,
             mode: .readWrite,
             options: options
+        )
+    }
+    
+    public static func overlay(
+        destination: String,
+        lowerDir: String,
+        upperDir: String,
+        workDir: String
+    ) -> MountConfig {
+        MountConfig(
+            source: "overlay",
+            destination: destination,
+            type: .overlay,
+            mode: .readWrite,
+            options: [],
+            overlayLowerDir: lowerDir,
+            overlayUpperDir: upperDir,
+            overlayWorkDir: workDir
         )
     }
 }

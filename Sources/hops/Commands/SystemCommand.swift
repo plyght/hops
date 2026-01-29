@@ -24,7 +24,8 @@ struct SystemCommand: AsyncParsableCommand {
             StartDaemon.self,
             StopDaemon.self,
             StatusDaemon.self,
-            RestartDaemon.self
+            RestartDaemon.self,
+            CleanupContainers.self
         ]
     )
 }
@@ -252,15 +253,282 @@ extension SystemCommand {
         func run() async throws {
             if try await isDaemonRunning() {
                 print("Stopping Hops daemon...")
-                var stopCmd = StopDaemon()
+                let stopCmd = StopDaemon()
                 try await stopCmd.run()
                 
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
             
             print("Starting Hops daemon...")
-            var startCmd = StartDaemon()
+            let startCmd = StartDaemon()
             try await startCmd.run()
+        }
+    }
+    
+    struct CleanupContainers: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "cleanup",
+            abstract: "Remove stopped containers and orphaned rootfs"
+        )
+        
+        @Flag(name: .long, help: "Show what would be deleted without actually deleting")
+        var dryRun: Bool = false
+        
+        @Flag(name: .long, help: "Delete orphaned rootfs images")
+        var force: Bool = false
+        
+        func run() async throws {
+            let homeDir = FileManager.default.homeDirectoryForCurrentUser
+            let hopsDir = homeDir.appendingPathComponent(".hops")
+            let containersDir = hopsDir.appendingPathComponent("containers")
+            let rootfsDir = hopsDir.appendingPathComponent("rootfs")
+            
+            var totalContainerSize: UInt64 = 0
+            var totalRootfsSize: UInt64 = 0
+            var stoppedContainers: [(url: URL, size: UInt64)] = []
+            var orphanedRootfs: [(url: URL, size: UInt64)] = []
+            
+            let runningContainerIds = try await getRunningContainerIds()
+            
+            if FileManager.default.fileExists(atPath: containersDir.path) {
+                let contents = try FileManager.default.contentsOfDirectory(
+                    at: containersDir,
+                    includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                )
+                
+                for containerDir in contents {
+                    let isDirectory = (try? containerDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                    guard isDirectory else { continue }
+                    
+                    let containerId = containerDir.lastPathComponent
+                    if runningContainerIds.contains(containerId) {
+                        continue
+                    }
+                    
+                    let size = calculateDirectorySize(containerDir)
+                    stoppedContainers.append((url: containerDir, size: size))
+                    totalContainerSize += size
+                }
+            }
+            
+            if FileManager.default.fileExists(atPath: rootfsDir.path) {
+                let referencedRootfs = try loadReferencedRootfs()
+                
+                let contents = try FileManager.default.contentsOfDirectory(
+                    at: rootfsDir,
+                    includingPropertiesForKeys: [.fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                )
+                
+                let rootfsImages = contents.filter { $0.pathExtension == "ext4" }
+                
+                if rootfsImages.count > 1 {
+                    for rootfsImage in rootfsImages {
+                        let rootfsName = rootfsImage.deletingPathExtension().lastPathComponent
+                        if !referencedRootfs.contains(rootfsName) && !referencedRootfs.contains(rootfsImage.lastPathComponent) {
+                            if let attrs = try? rootfsImage.resourceValues(forKeys: [.fileSizeKey]),
+                               let fileSize = attrs.fileSize {
+                                orphanedRootfs.append((url: rootfsImage, size: UInt64(fileSize)))
+                                totalRootfsSize += UInt64(fileSize)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if stoppedContainers.isEmpty && orphanedRootfs.isEmpty {
+                print("No cleanup needed.")
+                return
+            }
+            
+            print("Cleanup summary:")
+            if !stoppedContainers.isEmpty {
+                print("  Stopped containers: \(stoppedContainers.count) (\(formatBytes(totalContainerSize)))")
+                if dryRun {
+                    for container in stoppedContainers {
+                        print("    - \(container.url.lastPathComponent)")
+                    }
+                }
+            }
+            
+            if !orphanedRootfs.isEmpty {
+                print("  Orphaned rootfs: \(orphanedRootfs.count) (\(formatBytes(totalRootfsSize)))")
+                if dryRun || !force {
+                    for rootfs in orphanedRootfs {
+                        print("    - \(rootfs.url.lastPathComponent)")
+                    }
+                }
+                if !force {
+                    print("  Use --force to delete orphaned rootfs images")
+                }
+            }
+            
+            if dryRun {
+                print()
+                print("Dry run mode: no files deleted")
+                print("Total space that would be reclaimed: \(formatBytes(totalContainerSize + totalRootfsSize))")
+                return
+            }
+            
+            var deletedContainers = 0
+            var deletedRootfs = 0
+            var reclaimedContainerSpace: UInt64 = 0
+            var reclaimedRootfsSpace: UInt64 = 0
+            
+            for container in stoppedContainers {
+                do {
+                    try FileManager.default.removeItem(at: container.url)
+                    deletedContainers += 1
+                    reclaimedContainerSpace += container.size
+                } catch {
+                    print("Warning: Failed to delete \(container.url.lastPathComponent): \(error)")
+                }
+            }
+            
+            if force {
+                for rootfs in orphanedRootfs {
+                    do {
+                        try FileManager.default.removeItem(at: rootfs.url)
+                        deletedRootfs += 1
+                        reclaimedRootfsSpace += rootfs.size
+                    } catch {
+                        print("Warning: Failed to delete \(rootfs.url.lastPathComponent): \(error)")
+                    }
+                }
+            }
+            
+            print()
+            if deletedContainers > 0 || deletedRootfs > 0 {
+                var parts: [String] = []
+                if deletedContainers > 0 {
+                    parts.append("\(deletedContainers) stopped container\(deletedContainers == 1 ? "" : "s") (\(formatBytes(reclaimedContainerSpace)))")
+                }
+                if deletedRootfs > 0 {
+                    parts.append("\(deletedRootfs) orphaned rootfs (\(formatBytes(reclaimedRootfsSpace)))")
+                }
+                print("Removed \(parts.joined(separator: ", "))")
+                print("Total space reclaimed: \(formatBytes(reclaimedContainerSpace + reclaimedRootfsSpace))")
+            } else {
+                print("No files deleted")
+            }
+        }
+        
+        private func getRunningContainerIds() async throws -> Set<String> {
+            guard try await isDaemonRunning() else {
+                return []
+            }
+            
+            do {
+                let homeDir = FileManager.default.homeDirectoryForCurrentUser
+                let socketPath = homeDir
+                    .appendingPathComponent(".hops")
+                    .appendingPathComponent("hops.sock")
+                    .path
+                
+                let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+                defer {
+                    Task {
+                        try? await group.shutdownGracefully()
+                    }
+                }
+                
+                let channel = try GRPCChannelPool.with(
+                    target: .unixDomainSocket(socketPath),
+                    transportSecurity: .plaintext,
+                    eventLoopGroup: group
+                )
+                
+                let client = Hops_HopsServiceAsyncClient(
+                    channel: channel,
+                    defaultCallOptions: CallOptions()
+                )
+                
+                let request = Hops_ListRequest()
+                let response = try await client.listSandboxes(request)
+                
+                let runningIds = response.sandboxes
+                    .filter { $0.state == .running }
+                    .map { $0.sandboxID }
+                
+                return Set(runningIds)
+            } catch {
+                return []
+            }
+        }
+        
+        private func loadReferencedRootfs() throws -> Set<String> {
+            var referenced = Set<String>()
+            let homeDir = FileManager.default.homeDirectoryForCurrentUser
+            let currentDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            
+            let profileDirs = [
+                homeDir.appendingPathComponent(".hops/profiles"),
+                currentDir.appendingPathComponent("config/profiles"),
+                currentDir.appendingPathComponent("config/examples")
+            ]
+            
+            for profileDir in profileDirs {
+                guard FileManager.default.fileExists(atPath: profileDir.path) else { continue }
+                
+                let contents = try? FileManager.default.contentsOfDirectory(
+                    at: profileDir,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )
+                
+                guard let profiles = contents?.filter({ $0.pathExtension == "toml" }) else { continue }
+                
+                for profilePath in profiles {
+                    if let policyData = try? String(contentsOf: profilePath, encoding: .utf8),
+                       let rootfsMatch = policyData.range(of: #"rootfs\s*=\s*"([^"]+)""#, options: .regularExpression) {
+                        let match = String(policyData[rootfsMatch])
+                        if let valueMatch = match.range(of: #""([^"]+)""#, options: .regularExpression) {
+                            let rootfsValue = String(match[valueMatch]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                            referenced.insert(rootfsValue)
+                        }
+                    }
+                }
+            }
+            
+            return referenced
+        }
+        
+        private func calculateDirectorySize(_ url: URL) -> UInt64 {
+            var totalSize: UInt64 = 0
+            
+            guard let enumerator = FileManager.default.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return 0
+            }
+            
+            for case let fileURL as URL in enumerator {
+                if let attrs = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
+                   let fileSize = attrs.fileSize {
+                    totalSize += UInt64(fileSize)
+                }
+            }
+            
+            return totalSize
+        }
+        
+        private func formatBytes(_ bytes: UInt64) -> String {
+            let kb = Double(bytes) / 1024.0
+            let mb = kb / 1024.0
+            let gb = mb / 1024.0
+            
+            if gb >= 1.0 {
+                return String(format: "%.1fG", gb)
+            } else if mb >= 1.0 {
+                return String(format: "%.1fM", mb)
+            } else if kb >= 1.0 {
+                return String(format: "%.1fK", kb)
+            } else {
+                return "\(bytes)B"
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ import HopsProto
 import GRPC
 import NIO
 import SwiftProtobuf
+import Darwin
 
 struct RunCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -20,7 +21,9 @@ struct RunCommand: AsyncParsableCommand {
               hops run ./myproject -- ./build.sh
               hops run --profile untrusted ./code -- python script.py
               hops run --network disabled --memory 512M ./project -- npm test
-              hops run --cpus 2 ./workdir -- cargo build --release
+              hops run --cpus 2 --max-processes 100 ./workdir -- cargo build --release
+              hops run --image alpine:3.19 /tmp -- /bin/sh
+              hops run --image ubuntu:22.04 --network outbound /tmp -- apt update
             """
     )
     
@@ -39,14 +42,23 @@ struct RunCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Memory limit (e.g., 512M, 2G)")
     var memory: String?
     
+    @Option(name: .long, help: "Maximum number of processes")
+    var maxProcesses: UInt?
+    
     @Option(name: .long, help: "Path to custom policy TOML file")
     var policyFile: String?
+    
+    @Option(name: .long, help: "OCI image to use (e.g., alpine:3.19, ubuntu:22.04)")
+    var image: String?
     
     @Flag(name: .long, help: "Enable verbose output")
     var verbose: Bool = false
     
     @Flag(name: .long, inversion: .prefixedNo, help: "Enable streaming output")
     var stream: Bool = true
+    
+    @Flag(name: .long, help: "Keep container directory after execution")
+    var keep: Bool = false
     
     @Argument(parsing: .remaining, help: "Command to execute inside the sandbox")
     var command: [String] = []
@@ -59,6 +71,7 @@ struct RunCommand: AsyncParsableCommand {
     
     mutating func run() async throws {
         let sandboxPath = expandPath(path)
+        let allocateTty = isStdinTTY()
         
         if verbose {
             print("Hops: Preparing sandbox environment...")
@@ -67,6 +80,7 @@ struct RunCommand: AsyncParsableCommand {
                 print("  Profile: \(profile)")
             }
             print("  Command: \(command.joined(separator: " "))")
+            print("  TTY: \(allocateTty ? "enabled" : "disabled")")
         }
         
         let policy = try await loadPolicy()
@@ -80,13 +94,17 @@ struct RunCommand: AsyncParsableCommand {
                 if let memory = resourceLimits.memoryBytes {
                     print("  Memory: \(formatBytes(memory))")
                 }
+                if let maxProcs = resourceLimits.maxProcesses {
+                    print("  Max Processes: \(maxProcs)")
+                }
             }
         }
         
         let exitCode = try await executeViaDaemon(
             sandboxPath: sandboxPath,
             command: command,
-            policy: policy
+            policy: policy,
+            allocateTty: allocateTty
         )
         
         if exitCode != 0 {
@@ -100,14 +118,28 @@ struct RunCommand: AsyncParsableCommand {
         if let policyFile = policyFile {
             policy = try Policy.load(fromTOMLFile: policyFile)
         } else if let profileName = profile {
-            let profilePath = profileDirectory().appendingPathComponent("\(profileName).toml")
-            if FileManager.default.fileExists(atPath: profilePath.path) {
-                policy = try Policy.load(fromTOMLFile: profilePath.path)
-            } else {
-                throw ValidationError("Profile '\(profileName)' not found at \(profilePath.path)")
+            let directories = profileDirectories()
+            var foundPath: URL?
+            
+            for dir in directories {
+                let candidate = dir.appendingPathComponent("\(profileName).toml")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    foundPath = candidate
+                    break
+                }
             }
+            
+            guard let profilePath = foundPath else {
+                throw ValidationError("Profile '\(profileName)' not found in any profile directory")
+            }
+            
+            policy = try Policy.load(fromTOMLFile: profilePath.path)
         } else {
             policy = Policy.default
+        }
+        
+        if let imageString = image {
+            policy.ociImage = imageString
         }
         
         if let networkOverride = network {
@@ -131,29 +163,77 @@ struct RunCommand: AsyncParsableCommand {
             policy.resources?.memoryBytes = try parseMemoryString(memoryOverride)
         }
         
+        if let maxProcsOverride = maxProcesses {
+            if policy.resources == nil {
+                policy.resources = ResourceLimits()
+            }
+            policy.resources?.maxProcesses = maxProcsOverride
+        }
+        
         return policy
     }
     
     private func executeViaDaemon(
         sandboxPath: String,
         command: [String],
-        policy: Policy
+        policy: Policy,
+        allocateTty: Bool
     ) async throws -> Int32 {
         let client = try await DaemonClient.connect()
+        
+        var originalTermios: termios?
+        if allocateTty {
+            originalTermios = try setRawTerminalMode()
+        }
+        
+        defer {
+            if let originalTermios = originalTermios {
+                restoreTerminalMode(originalTermios)
+            }
+        }
         
         if stream {
             return try await client.executeStreaming(
                 sandboxPath: sandboxPath,
                 command: command,
-                policy: policy
+                policy: policy,
+                keep: keep,
+                allocateTty: allocateTty
             )
         } else {
             return try await client.execute(
                 sandboxPath: sandboxPath,
                 command: command,
-                policy: policy
+                policy: policy,
+                keep: keep,
+                allocateTty: allocateTty
             )
         }
+    }
+    
+    private func setRawTerminalMode() throws -> termios {
+        var originalTermios: termios = termios()
+        guard tcgetattr(STDIN_FILENO, &originalTermios) == 0 else {
+            throw ValidationError("Failed to get terminal attributes")
+        }
+        
+        var rawTermios = originalTermios
+        cfmakeraw(&rawTermios)
+        
+        guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &rawTermios) == 0 else {
+            throw ValidationError("Failed to set raw terminal mode")
+        }
+        
+        return originalTermios
+    }
+    
+    private func restoreTerminalMode(_ termios: termios) {
+        var mutableTermios = termios
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &mutableTermios)
+    }
+    
+    private func isStdinTTY() -> Bool {
+        return isatty(STDIN_FILENO) != 0
     }
     
     private func expandPath(_ path: String) -> String {
@@ -166,9 +246,15 @@ struct RunCommand: AsyncParsableCommand {
         return FileManager.default.currentDirectoryPath + "/" + path
     }
     
-    private func profileDirectory() -> URL {
+    private func profileDirectories() -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".hops/profiles")
+        let current = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        
+        return [
+            home.appendingPathComponent(".hops/profiles"),
+            current.appendingPathComponent("config/profiles"),
+            current.appendingPathComponent("config/examples")
+        ]
     }
     
     private func parseMemoryString(_ memory: String) throws -> UInt64 {
@@ -248,12 +334,16 @@ struct DaemonClient {
     func execute(
         sandboxPath: String,
         command: [String],
-        policy: Policy
+        policy: Policy,
+        keep: Bool,
+        allocateTty: Bool
     ) async throws -> Int32 {
         var runRequest = Hops_RunRequest()
         runRequest.command = command
         runRequest.workingDirectory = sandboxPath
         runRequest.inlinePolicy = buildProtoPolicy(policy)
+        runRequest.keep = keep
+        runRequest.allocateTty = allocateTty
         
         let response = try await client.runSandbox(runRequest)
         
@@ -267,36 +357,89 @@ struct DaemonClient {
     func executeStreaming(
         sandboxPath: String,
         command: [String],
-        policy: Policy
+        policy: Policy,
+        keep: Bool,
+        allocateTty: Bool
     ) async throws -> Int32 {
         var runRequest = Hops_RunRequest()
         runRequest.command = command
         runRequest.workingDirectory = sandboxPath
         runRequest.inlinePolicy = buildProtoPolicy(policy)
+        runRequest.keep = keep
+        runRequest.allocateTty = allocateTty
         
-        let responseStream = client.runSandboxStreaming(runRequest)
+        let call = client.makeRunSandboxStreamingCall()
+        var inputChunk = Hops_InputChunk()
+        inputChunk.type = .run
+        inputChunk.runRequest = runRequest
+        try await call.requestStream.send(inputChunk)
+        call.requestStream.finish()
+        
+        let responseStream = call.responseStream
         var exitCode: Int32 = 1
         
-        for try await chunk in responseStream {
-            switch chunk.type {
-            case .stdout:
-                if !chunk.data.isEmpty {
-                    FileHandle.standardOutput.write(chunk.data)
+        if allocateTty {
+            let signalSource = setupWindowResizeHandler()
+            
+            defer {
+                signalSource?.cancel()
+            }
+            
+            for try await chunk in responseStream {
+                switch chunk.type {
+                case .stdout:
+                    if !chunk.data.isEmpty {
+                        FileHandle.standardOutput.write(chunk.data)
+                    }
+                case .stderr:
+                    if !chunk.data.isEmpty {
+                        FileHandle.standardError.write(chunk.data)
+                    }
+                case .exit:
+                    if chunk.hasExitCode {
+                        exitCode = chunk.exitCode
+                    }
+                case .UNRECOGNIZED:
+                    break
                 }
-            case .stderr:
-                if !chunk.data.isEmpty {
-                    FileHandle.standardError.write(chunk.data)
+            }
+        } else {
+            for try await chunk in responseStream {
+                switch chunk.type {
+                case .stdout:
+                    if !chunk.data.isEmpty {
+                        FileHandle.standardOutput.write(chunk.data)
+                    }
+                case .stderr:
+                    if !chunk.data.isEmpty {
+                        FileHandle.standardError.write(chunk.data)
+                    }
+                case .exit:
+                    if chunk.hasExitCode {
+                        exitCode = chunk.exitCode
+                    }
+                case .UNRECOGNIZED:
+                    break
                 }
-            case .exit:
-                if chunk.hasExitCode {
-                    exitCode = chunk.exitCode
-                }
-            case .UNRECOGNIZED:
-                break
             }
         }
         
         return exitCode
+    }
+    
+    private func setupWindowResizeHandler() -> DispatchSourceSignal? {
+        let signalSource = DispatchSource.makeSignalSource(
+            signal: SIGWINCH,
+            queue: DispatchQueue.global()
+        )
+        
+        signalSource.setEventHandler {
+        }
+        
+        signal(SIGWINCH, SIG_IGN)
+        signalSource.resume()
+        
+        return signalSource
     }
     
     func close() async throws {

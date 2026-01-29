@@ -12,13 +12,20 @@ Hops isolates processes in controlled sandbox environments using [Apple's Contai
 
 ## Requirements
 
-- **macOS 26** (Sequoia) or later
+- **macOS 26 (Sequoia)** or later
 - **Apple Silicon** (M1/M2/M3/M4)
 - **Swift 6.0+**
-- **Rust 1.75+** (for GUI only)
-- **Linux Kernel and Initfs** (required for container execution)
+- **Rust 1.75+** (GUI only)
 
-> **Important**: Before running containers, you must install a Linux kernel image (`vmlinux`) and initial filesystem (`initfs`) to `~/.hops/`. The daemon cannot start without these files. Download pre-built versions from [Apple Container releases](https://github.com/apple/container/releases) or build from source following instructions in [docs/setup.md](docs/setup.md#kernel-and-initfs-configuration).
+### Runtime Prerequisites
+
+Before starting the daemon, you must have:
+
+1. **Linux Kernel**: `~/.hops/vmlinux` (Kata Containers ARM64 kernel, ~14MB)
+2. **Init Filesystem**: `~/.hops/initfs` (vminitd init system, ~256MB)
+3. **Alpine Rootfs**: `~/.hops/alpine-rootfs.ext4` (Alpine Linux userland, ~512MB)
+
+Download from [Apple Container releases](https://github.com/apple/container/releases) or see [docs/setup.md](docs/setup.md) for detailed installation.
 
 ## Features
 
@@ -30,29 +37,47 @@ Hops isolates processes in controlled sandbox environments using [Apple's Contai
 - **Secure Defaults**: Network disabled, minimal filesystem access, symlink attack prevention
 - **Desktop GUI**: Iced-based Rust application for visual profile management and run history
 
-## Installation
+## Quick Start
 
-### CLI & Daemon
+### 1. Build and Install
 
 ```bash
 git clone https://github.com/plyght/hops.git
 cd hops
-swift build -c release
-sudo cp .build/release/hops /usr/local/bin/
-sudo cp .build/release/hopsd /usr/local/bin/
+./build-and-sign.sh
+sudo cp .build/debug/hops /usr/local/bin/
+sudo cp .build/debug/hopsd /usr/local/bin/
 ```
 
-### Daemon Setup (launchd)
+### 2. Download Runtime Files
 
 ```bash
-# System-wide (requires root)
-sudo ./launchd/install.sh
-
-# Or user-level (no root)
-./launchd/install-user.sh
+cd ~/.hops
+wget https://github.com/apple/container/releases/latest/download/vmlinux
+wget https://github.com/apple/container/releases/latest/download/init.block
+mv init.block initfs
+wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz
 ```
 
-See [launchd/README.md](launchd/README.md) for manual setup and troubleshooting.
+### 3. Create Alpine Rootfs
+
+```bash
+.build/debug/hops-create-rootfs
+```
+
+### 4. Start Daemon
+
+```bash
+.build/debug/hopsd > /tmp/hopsd.log 2>&1 &
+```
+
+### 5. Run a Command
+
+```bash
+.build/debug/hops run /tmp -- /bin/echo "Hello from Hops!"
+```
+
+See [docs/setup.md](docs/setup.md) for detailed installation and [launchd/README.md](launchd/README.md) for daemon management.
 
 ### GUI (Optional)
 
@@ -60,32 +85,44 @@ See [launchd/README.md](launchd/README.md) for manual setup and troubleshooting.
 cd hops-gui
 cargo build --release
 cp target/release/hops-gui /usr/local/bin/
+hops-gui
 ```
 
 ## Usage
 
-### CLI
+### Basic Commands
 
 ```bash
-# Start the daemon
-hops system start
+# Run a command in sandbox
+hops run /tmp -- /bin/echo "Hello"
 
-# Run a command in a sandbox with real-time output streaming (default)
-hops run ./project -- python script.py
+# Run shell commands
+hops run /tmp -- /bin/sh -c "uname -a"
 
-# Run with a named profile
-hops run --profile untrusted ./code -- bun test
+# With resource limits
+hops run --cpus 2 --memory 512M /tmp -- /bin/ls
 
-# Run with inline resource limits
-hops run --network disabled --memory 512M --cpus 2 ./project -- cargo build
+# With network access
+hops run --network outbound /tmp -- /bin/wget example.com
 
-# Disable streaming for quick execution (no output capture)
-hops run --stream=false ./project -- echo "hello"
+# Check daemon status
+hops system status
 
-# Manage profiles
+# Stop daemon
+hops system stop
+```
+
+### Profile Management
+
+```bash
+# List available profiles
 hops profile list
-hops profile create restrictive --template restrictive
-hops profile show default
+
+# Run with profile
+hops run --profile untrusted /tmp -- /bin/sh
+
+# Create custom profile
+hops profile create custom --template restrictive
 ```
 
 ### GUI
@@ -94,11 +131,11 @@ hops profile show default
 hops-gui
 ```
 
-The GUI provides:
-- Visual profile editor with capability toggles
-- Profile list with summary cards
-- Run history with filtering and statistics
-- One-click profile duplication and deletion
+Features:
+- Visual profile editor
+- Real-time sandbox status
+- Run history with gRPC integration
+- Connection status indicator
 
 ## Configuration
 
@@ -186,42 +223,57 @@ hops-gui (Rust)
 ## Development
 
 ```bash
-# Build everything
+# Build
 swift build
-cd hops-gui && cargo build
+./build-and-sign.sh
 
 # Run tests
 swift test
-cd hops-gui && cargo test
 
 # Regenerate gRPC stubs (after modifying proto/hops.proto)
-swift build --product protoc-gen-grpc-swift
-protoc \
-  --swift_out=Visibility=Public:Sources/HopsProto \
-  --grpc-swift_out=Visibility=Public,Server=true,Client=true:Sources/HopsProto \
-  --plugin=protoc-gen-grpc-swift=.build/debug/protoc-gen-grpc-swift \
-  -I proto proto/hops.proto
+./generate-proto.sh
 ```
 
 ### Dependencies
 
 **Swift**:
-- [swift-argument-parser](https://github.com/apple/swift-argument-parser) - CLI parsing
-- [TOMLKit](https://github.com/LebJe/TOMLKit) - TOML configuration parsing
-- [grpc-swift](https://github.com/grpc/grpc-swift) - gRPC communication
-- [swift-nio](https://github.com/apple/swift-nio) - Async networking
-- [Containerization](https://github.com/apple/containerization) - Apple's sandbox framework
+- swift-argument-parser - CLI parsing
+- TOMLKit - TOML configuration parsing
+- grpc-swift - gRPC communication
+- swift-nio - Async networking
+- Containerization (0.23.2) - Apple's sandbox framework
 
 **Rust**:
-- [iced](https://github.com/iced-rs/iced) - Cross-platform GUI
-- [serde](https://github.com/serde-rs/serde) - Serialization
-- [toml](https://github.com/toml-rs/toml) - TOML parsing
+- iced (0.13) - Cross-platform GUI
+- tonic (0.12) - gRPC client
+- serde - Serialization
+- toml - TOML parsing
+
+## Status
+
+**Current Version**: Fully functional end-to-end
+
+Working:
+- Daemon lifecycle (start/stop/status)
+- Container execution with Alpine Linux userland
+- Streaming stdout/stderr with exit code propagation
+- Resource limits (CPU, memory, process count)
+- Per-container filesystem isolation
+- gRPC CLI-daemon communication
+- Rust GUI with live daemon integration
+
+Known Limitations:
+- No interactive TTY support
+- Single Alpine rootfs (all containers use same base image)
+- Manual container cleanup required
+- Network capabilities untested
 
 ## Documentation
 
-- [docs/setup.md](docs/setup.md) - Detailed setup guide including kernel/initfs
+- [docs/setup.md](docs/setup.md) - Detailed installation and configuration
 - [config/README.md](config/README.md) - Policy configuration reference
-- [launchd/README.md](launchd/README.md) - Daemon installation options
+- [launchd/README.md](launchd/README.md) - Daemon management
+- [docs/testing.md](docs/testing.md) - Test coverage report
 
 ## License
 

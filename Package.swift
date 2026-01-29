@@ -23,6 +23,10 @@ let package = Package(
         .executable(
             name: "hopsd",
             targets: ["hopsd"]
+        ),
+        .executable(
+            name: "hops-create-rootfs",
+            targets: ["hops-create-rootfs"]
         )
     ],
     dependencies: [
@@ -57,7 +61,9 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "GRPC", package: "grpc-swift"),
                 .product(name: "NIO", package: "swift-nio"),
-                .product(name: "SwiftProtobuf", package: "swift-protobuf")
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "Containerization", package: "containerization"),
+                .product(name: "ContainerizationArchive", package: "containerization")
             ]
         ),
         .executableTarget(
@@ -72,6 +78,13 @@ let package = Package(
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "Containerization", package: "containerization"),
                 .product(name: "ContainerizationExtras", package: "containerization")
+            ]
+        ),
+        .executableTarget(
+            name: "hops-create-rootfs",
+            dependencies: [
+                .product(name: "Containerization", package: "containerization"),
+                .product(name: "ContainerizationArchive", package: "containerization")
             ]
         ),
         .testTarget(

@@ -1,4 +1,4 @@
-# Hops Testing Suite - Coverage Report
+# Hops Testing Suite
 
 ## Overview
 Comprehensive unit and integration tests have been implemented for the Hops sandboxing system, achieving **100% passing rate** across all test categories.

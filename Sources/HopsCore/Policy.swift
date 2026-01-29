@@ -7,6 +7,8 @@ public struct Policy: Codable, Sendable, Equatable {
     public var capabilities: CapabilityGrant
     public var sandbox: SandboxConfig
     public var metadata: [String: String]
+    public var rootfs: String?
+    public var ociImage: String?
     
     public var resources: ResourceLimits? {
         get { capabilities.resourceLimits }
@@ -23,7 +25,9 @@ public struct Policy: Codable, Sendable, Equatable {
         description: String? = nil,
         capabilities: CapabilityGrant = .default,
         sandbox: SandboxConfig = SandboxConfig(),
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        rootfs: String? = nil,
+        ociImage: String? = nil
     ) {
         self.name = name
         self.version = version
@@ -31,6 +35,8 @@ public struct Policy: Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.sandbox = sandbox
         self.metadata = metadata
+        self.rootfs = rootfs
+        self.ociImage = ociImage
     }
     
     public static var `default`: Policy {

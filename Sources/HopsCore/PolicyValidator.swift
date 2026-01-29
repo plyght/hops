@@ -9,7 +9,9 @@ public enum PolicyValidationError: Error, CustomStringConvertible {
     case mountDestinationNotAbsolute(String)
     case conflictingPaths(String, String)
     case resourceLimitTooHigh(String, UInt64)
+    case resourceLimitTooLow(String, UInt64)
     case insecureMountConfiguration(String)
+    case rootfsNotFound(String)
     
     public var description: String {
         switch self {
@@ -29,8 +31,19 @@ public enum PolicyValidationError: Error, CustomStringConvertible {
             return "Conflicting paths: \(path1) and \(path2)"
         case .resourceLimitTooHigh(let resource, let value):
             return "Resource limit too high for \(resource): \(value)"
+        case .resourceLimitTooLow(let resource, let value):
+            return "Resource limit too low for \(resource): \(value). Minimum: cpus=1, memory=1MB, max_processes=1"
         case .insecureMountConfiguration(let reason):
             return "Insecure mount configuration: \(reason)"
+        case .rootfsNotFound(let path):
+            return """
+            Rootfs image not found: \(path)
+            
+            Available rootfs images should be in ~/.hops/rootfs/ directory.
+            Example: ~/.hops/rootfs/alpine.ext4, ~/.hops/rootfs/ubuntu.ext4
+            
+            Or use absolute/tilde paths in the policy rootfs field.
+            """
         }
     }
 }
@@ -39,6 +52,9 @@ public struct PolicyValidator: Sendable {
     public let maxMemoryBytes: UInt64
     public let maxCPUs: UInt
     public let maxProcesses: UInt
+    public let minMemoryBytes: UInt64
+    public let minCPUs: UInt
+    public let minProcesses: UInt
     
     private let sensitivePaths = [
         "/etc/shadow",
@@ -56,11 +72,17 @@ public struct PolicyValidator: Sendable {
     public init(
         maxMemoryBytes: UInt64 = 8_589_934_592,
         maxCPUs: UInt = 16,
-        maxProcesses: UInt = 1024
+        maxProcesses: UInt = 1024,
+        minMemoryBytes: UInt64 = 1_048_576,
+        minCPUs: UInt = 1,
+        minProcesses: UInt = 1
     ) {
         self.maxMemoryBytes = maxMemoryBytes
         self.maxCPUs = maxCPUs
         self.maxProcesses = maxProcesses
+        self.minMemoryBytes = minMemoryBytes
+        self.minCPUs = minCPUs
+        self.minProcesses = minProcesses
     }
     
     private func canonicalizePath(_ path: String) -> String {
@@ -72,6 +94,7 @@ public struct PolicyValidator: Sendable {
         try validateBasicFields(policy)
         try validateCapabilities(policy.capabilities)
         try validateSandbox(policy.sandbox)
+        try validateRootfs(policy.rootfs)
     }
     
     private func validateBasicFields(_ policy: Policy) throws {
@@ -112,16 +135,31 @@ public struct PolicyValidator: Sendable {
     }
     
     private func validateResourceLimits(_ limits: ResourceLimits) throws {
-        if let cpus = limits.cpus, cpus > maxCPUs {
-            throw PolicyValidationError.resourceLimitTooHigh("cpus", UInt64(cpus))
+        if let cpus = limits.cpus {
+            if cpus < minCPUs {
+                throw PolicyValidationError.resourceLimitTooLow("cpus", UInt64(cpus))
+            }
+            if cpus > maxCPUs {
+                throw PolicyValidationError.resourceLimitTooHigh("cpus", UInt64(cpus))
+            }
         }
         
-        if let memory = limits.memoryBytes, memory > maxMemoryBytes {
-            throw PolicyValidationError.resourceLimitTooHigh("memory", memory)
+        if let memory = limits.memoryBytes {
+            if memory < minMemoryBytes {
+                throw PolicyValidationError.resourceLimitTooLow("memory", memory)
+            }
+            if memory > maxMemoryBytes {
+                throw PolicyValidationError.resourceLimitTooHigh("memory", memory)
+            }
         }
         
-        if let processes = limits.maxProcesses, processes > maxProcesses {
-            throw PolicyValidationError.resourceLimitTooHigh("max_processes", UInt64(processes))
+        if let processes = limits.maxProcesses {
+            if processes < minProcesses {
+                throw PolicyValidationError.resourceLimitTooLow("max_processes", UInt64(processes))
+            }
+            if processes > maxProcesses {
+                throw PolicyValidationError.resourceLimitTooHigh("max_processes", UInt64(processes))
+            }
         }
     }
     
@@ -219,6 +257,28 @@ public struct PolicyValidator: Sendable {
                     throw PolicyValidationError.conflictingPaths(mounts[i].destination, mounts[j].destination)
                 }
             }
+        }
+    }
+    
+    private func validateRootfs(_ rootfs: String?) throws {
+        guard let rootfs = rootfs else {
+            return
+        }
+        
+        let resolvedPath: String
+        if rootfs.hasPrefix("/") || rootfs.hasPrefix("~") {
+            let expandedPath = NSString(string: rootfs).expandingTildeInPath
+            resolvedPath = expandedPath
+        } else {
+            let homeDir = FileManager.default.homeDirectoryForCurrentUser
+            resolvedPath = homeDir
+                .appendingPathComponent(".hops")
+                .appendingPathComponent(rootfs)
+                .path
+        }
+        
+        guard FileManager.default.fileExists(atPath: resolvedPath) else {
+            throw PolicyValidationError.rootfsNotFound(resolvedPath)
         }
     }
 }
