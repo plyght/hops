@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/images/hops.png" alt="Hops" width="80" />
+  <img src="public/images/hops.png" alt="Hops" width="140" />
 </p>
 
 # Hops
