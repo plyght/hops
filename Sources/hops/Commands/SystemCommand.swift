@@ -1,5 +1,8 @@
 import ArgumentParser
 import Foundation
+import HopsProto
+import GRPC
+import NIO
 
 struct SystemCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -156,6 +159,16 @@ extension SystemCommand {
         }
         
         private func sendDaemonShutdown() async throws {
+            let pidFile = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".hops/hopsd.pid")
+            
+            guard FileManager.default.fileExists(atPath: pidFile.path),
+                  let pidString = try? String(contentsOf: pidFile, encoding: .utf8),
+                  let pid = Int32(pidString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw ValidationError("Could not read daemon PID")
+            }
+            
+            kill(pid, SIGTERM)
         }
         
         private func forceKillDaemon() async throws {
@@ -266,13 +279,40 @@ private func isDaemonRunning() async throws -> Bool {
 }
 
 private func getDaemonStatus() async throws -> DaemonStatus {
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser
+    let socketPath = homeDir
+        .appendingPathComponent(".hops")
+        .appendingPathComponent("hops.sock")
+        .path
+    
+    let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+    
+    let channel = try GRPCChannelPool.with(
+        target: .unixDomainSocket(socketPath),
+        transportSecurity: .plaintext,
+        eventLoopGroup: group
+    )
+    
+    let client = Hops_HopsServiceAsyncClient(
+        channel: channel,
+        defaultCallOptions: CallOptions()
+    )
+    
+    let request = Hops_DaemonStatusRequest()
+    let response = try await client.getDaemonStatus(request)
+    
+    try await group.shutdownGracefully()
+    
+    let startTime = Date(timeIntervalSince1970: TimeInterval(response.startTime))
+    let uptime = Date().timeIntervalSince(startTime)
+    
     return DaemonStatus(
-        pid: 12345,
-        uptime: 3600,
-        startTime: Date().addingTimeInterval(-3600),
-        activeSandboxes: 0,
-        totalExecutions: 42,
-        socketPath: "~/.hops/hopsd.sock",
+        pid: response.pid,
+        uptime: uptime,
+        startTime: startTime,
+        activeSandboxes: Int(response.activeSandboxes),
+        totalExecutions: 0,
+        socketPath: "~/.hops/hops.sock",
         logPath: "~/.hops/logs/hopsd.log"
     )
 }

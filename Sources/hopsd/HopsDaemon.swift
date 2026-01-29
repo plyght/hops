@@ -6,6 +6,7 @@ actor HopsDaemon {
     private var sandboxManager: SandboxManager?
     private var containerService: ContainerService?
     private var isRunning = false
+    private var startTime: Date?
     
     init(socketPath: String? = nil) {
         if let socketPath = socketPath {
@@ -25,6 +26,8 @@ actor HopsDaemon {
         
         try prepareSocketDirectory()
         removeExistingSocket()
+        try writePidFile()
+        startTime = Date()
         
         do {
             sandboxManager = try await SandboxManager()
@@ -33,10 +36,12 @@ actor HopsDaemon {
         } catch let error as SandboxManagerError {
             print("Error: \(error.localizedDescription)")
             fflush(stdout)
+            removePidFile()
             throw error
         } catch {
             print("Failed to initialize sandbox manager: \(error)")
             fflush(stdout)
+            removePidFile()
             throw error
         }
         
@@ -45,7 +50,8 @@ actor HopsDaemon {
         
         containerService = ContainerService(
             socketPath: socketPath,
-            sandboxManager: sandboxManager
+            sandboxManager: sandboxManager,
+            daemon: self
         )
         
         print("Starting gRPC server...")
@@ -73,6 +79,7 @@ actor HopsDaemon {
         await sandboxManager?.cleanup()
         
         removeExistingSocket()
+        removePidFile()
         isRunning = false
         
         print("hopsd stopped")
@@ -107,4 +114,33 @@ actor HopsDaemon {
             try? FileManager.default.removeItem(atPath: socketPath)
         }
     }
+    
+    private func writePidFile() throws {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let pidFile = homeDir.appendingPathComponent(".hops/hopsd.pid")
+        let pid = ProcessInfo.processInfo.processIdentifier
+        try String(pid).write(to: pidFile, atomically: true, encoding: .utf8)
+    }
+    
+    private func removePidFile() {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let pidFile = homeDir.appendingPathComponent(".hops/hopsd.pid")
+        try? FileManager.default.removeItem(at: pidFile)
+    }
+    
+    func getDaemonStatus() async -> DaemonStatusInfo {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let activeSandboxCount = await sandboxManager?.listSandboxes().count ?? 0
+        return DaemonStatusInfo(
+            pid: pid,
+            startTime: startTime ?? Date(),
+            activeSandboxes: activeSandboxCount
+        )
+    }
+}
+
+struct DaemonStatusInfo {
+    let pid: Int32
+    let startTime: Date
+    let activeSandboxes: Int
 }

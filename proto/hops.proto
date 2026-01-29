@@ -8,6 +8,7 @@ service HopsService {
   rpc StopSandbox(StopRequest) returns (StopResponse);
   rpc ListSandboxes(ListRequest) returns (ListResponse);
   rpc GetStatus(StatusRequest) returns (SandboxStatus);
+  rpc GetDaemonStatus(DaemonStatusRequest) returns (DaemonStatusResponse);
 }
 
 message RunRequest {
@@ -125,4 +126,13 @@ enum OutputType {
   OUTPUT_TYPE_STDOUT = 0;
   OUTPUT_TYPE_STDERR = 1;
   OUTPUT_TYPE_EXIT = 2;
+}
+
+message DaemonStatusRequest {
+}
+
+message DaemonStatusResponse {
+  int32 pid = 1;
+  int64 start_time = 2;
+  int32 active_sandboxes = 3;
 }

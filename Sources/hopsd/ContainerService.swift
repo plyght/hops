@@ -8,6 +8,7 @@ import SwiftProtobuf
 actor ContainerService: Hops_HopsServiceAsyncProvider {
     private let socketPath: String
     private weak var sandboxManager: SandboxManager?
+    private weak var daemon: HopsDaemon?
     private var isRunning = false
     private var server: Server?
     private var group: MultiThreadedEventLoopGroup?
@@ -16,9 +17,10 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         return nil
     }
     
-    init(socketPath: String, sandboxManager: SandboxManager?) {
+    init(socketPath: String, sandboxManager: SandboxManager?, daemon: HopsDaemon?) {
         self.socketPath = socketPath
         self.sandboxManager = sandboxManager
+        self.daemon = daemon
     }
     
     func start() async throws {
@@ -77,7 +79,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             
             let rootfs = URL(fileURLWithPath: request.workingDirectory)
             
-            _ = try await manager.runSandbox(
+            let status = try await manager.runSandbox(
                 id: sandboxId,
                 policy: policy,
                 command: request.command,
@@ -86,7 +88,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
             
             var response = Hops_RunResponse()
             response.sandboxID = sandboxId
-            response.pid = 0
+            response.pid = status.pid
             response.success = true
             
             return response
@@ -184,9 +186,9 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         response.sandboxes = sandboxes.map { info in
             var protoInfo = Hops_SandboxInfo()
             protoInfo.sandboxID = info.id
-            protoInfo.pid = 0
-            protoInfo.state = .running
-            protoInfo.command = []
+            protoInfo.pid = info.pid
+            protoInfo.state = info.state == "running" ? .running : .stopped
+            protoInfo.command = info.command
             return protoInfo
         }
         
@@ -206,12 +208,13 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         
         do {
             let status = try await manager.getStatus(id: request.sandboxID)
+            let info = await manager.listSandboxes().first { $0.id == request.sandboxID }
             
             var protoStatus = Hops_SandboxStatus()
             protoStatus.sandboxID = status.id
-            protoStatus.pid = 0
+            protoStatus.pid = status.pid
             protoStatus.state = status.state == "running" ? .running : .stopped
-            protoStatus.command = []
+            protoStatus.command = info?.command ?? []
             protoStatus.startTime = Int64(status.startedAt?.timeIntervalSince1970 ?? 0)
             
             return protoStatus
@@ -294,10 +297,33 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         }
         
         guard let value = UInt64(numericPart) else {
-            return 0
+            print("WARNING: Invalid memory string '\(memory)', defaulting to 512MB")
+            return 512 * 1024 * 1024
         }
         
         return value * multiplier
+    }
+    
+    nonisolated func getDaemonStatus(
+        request: Hops_DaemonStatusRequest,
+        context: GRPCAsyncServerCallContext
+    ) async throws -> Hops_DaemonStatusResponse {
+        guard let daemon = await daemon else {
+            var response = Hops_DaemonStatusResponse()
+            response.pid = ProcessInfo.processInfo.processIdentifier
+            response.startTime = Int64(Date().timeIntervalSince1970)
+            response.activeSandboxes = 0
+            return response
+        }
+        
+        let status = await daemon.getDaemonStatus()
+        
+        var response = Hops_DaemonStatusResponse()
+        response.pid = status.pid
+        response.startTime = Int64(status.startTime.timeIntervalSince1970)
+        response.activeSandboxes = Int32(status.activeSandboxes)
+        
+        return response
     }
 }
 
@@ -308,12 +334,16 @@ enum ContainerServiceError: Error {
 public struct SandboxInfo: Codable, Sendable {
     public let id: String
     public let policyName: String
+    public let command: [String]
+    public let pid: Int32
     public let state: String
     public let startedAt: Date?
     
-    public init(id: String, policyName: String, state: String, startedAt: Date?) {
+    public init(id: String, policyName: String, command: [String], pid: Int32, state: String, startedAt: Date?) {
         self.id = id
         self.policyName = policyName
+        self.command = command
+        self.pid = pid
         self.state = state
         self.startedAt = startedAt
     }
@@ -321,6 +351,7 @@ public struct SandboxInfo: Codable, Sendable {
 
 public struct SandboxStatus: Codable, Sendable {
     public let id: String
+    public let pid: Int32
     public let state: String
     public let exitCode: Int?
     public let startedAt: Date?
@@ -328,12 +359,14 @@ public struct SandboxStatus: Codable, Sendable {
     
     public init(
         id: String,
+        pid: Int32,
         state: String,
         exitCode: Int?,
         startedAt: Date?,
         finishedAt: Date?
     ) {
         self.id = id
+        self.pid = pid
         self.state = state
         self.exitCode = exitCode
         self.startedAt = startedAt

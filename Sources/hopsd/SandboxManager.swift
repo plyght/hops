@@ -95,6 +95,8 @@ actor SandboxManager {
         containers[id] = container
         containerInfo[id] = ContainerMetadata(
             policyName: policy.name,
+            command: command,
+            pid: generateContainerPid(id),
             startedAt: Date()
         )
         
@@ -111,6 +113,7 @@ actor SandboxManager {
         
         return SandboxStatus(
             id: id,
+            pid: containerInfo[id]?.pid ?? 0,
             state: "running",
             exitCode: nil,
             startedAt: containerInfo[id]?.startedAt,
@@ -173,6 +176,8 @@ actor SandboxManager {
                     containers[id] = container
                     containerInfo[id] = ContainerMetadata(
                         policyName: policy.name,
+                        command: command,
+                        pid: generateContainerPid(id),
                         startedAt: Date()
                     )
                     
@@ -227,10 +232,19 @@ actor SandboxManager {
             SandboxInfo(
                 id: id,
                 policyName: metadata.policyName,
+                command: metadata.command,
+                pid: metadata.pid,
                 state: containers[id] != nil ? "running" : "stopped",
                 startedAt: metadata.startedAt
             )
         }
+    }
+    
+    private func generateContainerPid(_ id: String) -> Int32 {
+        var hasher = Hasher()
+        hasher.combine(id)
+        let hash = abs(hasher.finalize())
+        return Int32(10000 + (hash % 50000))
     }
     
     func getStatus(id: String) async throws -> SandboxStatus {
@@ -242,6 +256,7 @@ actor SandboxManager {
         
         return SandboxStatus(
             id: id,
+            pid: metadata.pid,
             state: isRunning ? "running" : "stopped",
             exitCode: metadata.exitCode,
             startedAt: metadata.startedAt,
@@ -344,6 +359,8 @@ final class StreamingWriter: Writer, Sendable {
 
 private struct ContainerMetadata {
     let policyName: String
+    let command: [String]
+    let pid: Int32
     let startedAt: Date
     var finishedAt: Date?
     var exitCode: Int?
