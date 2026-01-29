@@ -1,3 +1,4 @@
+use crate::grpc_client::{GrpcClient, GrpcError};
 use crate::models::capability::{FilesystemCapability, NetworkCapability};
 use crate::models::policy::Policy;
 use crate::utils::config;
@@ -16,6 +17,9 @@ pub struct HopsGui {
     pub validation_errors: ValidationErrors,
     pub run_history: Vec<RunRecord>,
     pub history_filter: String,
+    pub grpc_client: Option<GrpcClient>,
+    pub daemon_status: DaemonStatus,
+    pub loading_state: LoadingState,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -47,12 +51,26 @@ pub enum ViewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DaemonStatus {
+    Unknown,
+    Connected,
+    Offline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoadingState {
+    Idle,
+    LoadingHistory,
+    RunningSandbox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PathType {
     Allowed,
     Denied,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Message {
     ProfilesLoaded(Vec<Policy>),
     ProfileSelected(usize),
@@ -71,40 +89,60 @@ pub enum Message {
     SaveProfile,
     SwitchView(ViewMode),
     HistoryFilterChanged(String),
+    GrpcClientConnected(Result<GrpcClient, String>),
+    RunSandbox { profile_idx: usize, command: String },
+    RunSandboxResult(Result<String, String>, GrpcClient),
+    StopSandbox { sandbox_id: String },
+    StopSandboxResult(Result<(), String>, GrpcClient),
+    HistoryLoaded(Result<Vec<RunRecord>, String>, GrpcClient),
+}
+
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        match self {
+            Message::ProfilesLoaded(p) => Message::ProfilesLoaded(p.clone()),
+            Message::ProfileSelected(i) => Message::ProfileSelected(*i),
+            Message::CreateNewProfile => Message::CreateNewProfile,
+            Message::DeleteProfile(i) => Message::DeleteProfile(*i),
+            Message::DuplicateProfile(i) => Message::DuplicateProfile(*i),
+            Message::NetworkCapabilityChanged(c) => Message::NetworkCapabilityChanged(*c),
+            Message::FilesystemCapabilityToggled(c) => Message::FilesystemCapabilityToggled(*c),
+            Message::PathInputChanged { path_type, value } => Message::PathInputChanged {
+                path_type: *path_type,
+                value: value.clone(),
+            },
+            Message::AddPath { path_type } => Message::AddPath {
+                path_type: *path_type,
+            },
+            Message::RemovePath { path_type, index } => Message::RemovePath {
+                path_type: *path_type,
+                index: *index,
+            },
+            Message::CpuChanged(f) => Message::CpuChanged(*f),
+            Message::MemoryBytesChanged(s) => Message::MemoryBytesChanged(s.clone()),
+            Message::MaxProcessesChanged(s) => Message::MaxProcessesChanged(s.clone()),
+            Message::NameChanged(s) => Message::NameChanged(s.clone()),
+            Message::SaveProfile => Message::SaveProfile,
+            Message::SwitchView(v) => Message::SwitchView(*v),
+            Message::HistoryFilterChanged(s) => Message::HistoryFilterChanged(s.clone()),
+            Message::RunSandbox {
+                profile_idx,
+                command,
+            } => Message::RunSandbox {
+                profile_idx: *profile_idx,
+                command: command.clone(),
+            },
+            Message::StopSandbox { sandbox_id } => Message::StopSandbox {
+                sandbox_id: sandbox_id.clone(),
+            },
+            _ => panic!("Cannot clone Message with GrpcClient"),
+        }
+    }
 }
 
 impl HopsGui {
     pub fn new() -> (Self, Task<Message>) {
         let profiles = config::load_profiles().unwrap_or_default();
-        let run_history = vec![
-            RunRecord {
-                id: "sbx_a1b2c3d4".to_string(),
-                profile_name: "default".to_string(),
-                start_time: "2026-01-29 14:23:15".to_string(),
-                duration: "2m 34s".to_string(),
-                exit_code: 0,
-                denied_capabilities: vec![],
-            },
-            RunRecord {
-                id: "sbx_e5f6g7h8".to_string(),
-                profile_name: "restrictive".to_string(),
-                start_time: "2026-01-29 13:45:22".to_string(),
-                duration: "0m 12s".to_string(),
-                exit_code: 1,
-                denied_capabilities: vec![
-                    "Network: Attempted outbound connection to 8.8.8.8:443".to_string(),
-                    "Filesystem: Write denied to /etc/hosts".to_string(),
-                ],
-            },
-            RunRecord {
-                id: "sbx_i9j0k1l2".to_string(),
-                profile_name: "build".to_string(),
-                start_time: "2026-01-29 12:10:05".to_string(),
-                duration: "15m 48s".to_string(),
-                exit_code: 0,
-                denied_capabilities: vec![],
-            },
-        ];
         (
             Self {
                 profiles,
@@ -112,10 +150,21 @@ impl HopsGui {
                 view_mode: ViewMode::ProfileList,
                 path_inputs: PathInputs::default(),
                 validation_errors: ValidationErrors::default(),
-                run_history,
+                run_history: vec![],
                 history_filter: String::new(),
+                grpc_client: None,
+                daemon_status: DaemonStatus::Unknown,
+                loading_state: LoadingState::Idle,
             },
-            Task::none(),
+            Task::perform(
+                async {
+                    match GrpcClient::connect().await {
+                        Ok(client) => Ok(client),
+                        Err(e) => Err(e.to_string()),
+                    }
+                },
+                Message::GrpcClientConnected,
+            ),
         )
     }
 
@@ -298,10 +347,113 @@ impl HopsGui {
                 self.view_mode = mode;
                 if mode == ViewMode::ProfileList {
                     self.selected_profile = None;
+                } else if mode == ViewMode::RunHistory && self.grpc_client.is_some() {
+                    self.loading_state = LoadingState::LoadingHistory;
+                    let mut client = self.grpc_client.take().unwrap();
+                    return Task::perform(
+                        async move {
+                            let result = client.list_sandboxes(true).await;
+                            (client, result)
+                        },
+                        move |(client, result)| match result {
+                            Ok(sandboxes) => {
+                                let records: Vec<RunRecord> = sandboxes
+                                    .into_iter()
+                                    .map(|s| RunRecord {
+                                        id: s.sandbox_id.clone(),
+                                        profile_name: "unknown".to_string(),
+                                        start_time: format_timestamp(0),
+                                        duration: "unknown".to_string(),
+                                        exit_code: 0,
+                                        denied_capabilities: vec![],
+                                    })
+                                    .collect();
+                                Message::HistoryLoaded(Ok(records), client)
+                            }
+                            Err(e) => Message::HistoryLoaded(Err(e.to_string()), client),
+                        },
+                    );
                 }
             }
             Message::HistoryFilterChanged(filter) => {
                 self.history_filter = filter;
+            }
+            Message::GrpcClientConnected(result) => match result {
+                Ok(client) => {
+                    self.grpc_client = Some(client);
+                    self.daemon_status = DaemonStatus::Connected;
+                }
+                Err(_) => {
+                    self.daemon_status = DaemonStatus::Offline;
+                }
+            },
+            Message::RunSandbox {
+                profile_idx,
+                command,
+            } => {
+                if let Some(profile) = self.profiles.get(profile_idx) {
+                    if let Some(mut client) = self.grpc_client.take() {
+                        self.loading_state = LoadingState::RunningSandbox;
+                        let policy = profile.clone();
+                        let cmd_parts: Vec<String> =
+                            command.split_whitespace().map(|s| s.to_string()).collect();
+                        return Task::perform(
+                            async move {
+                                let result = client
+                                    .run_sandbox(&policy, cmd_parts, Some("/".to_string()))
+                                    .await;
+                                (client, result)
+                            },
+                            |(client, result)| {
+                                Message::RunSandboxResult(
+                                    result.map(|r| r.sandbox_id).map_err(|e| e.to_string()),
+                                    client,
+                                )
+                            },
+                        );
+                    }
+                }
+            }
+            Message::RunSandboxResult(result, client) => {
+                self.grpc_client = Some(client);
+                self.loading_state = LoadingState::Idle;
+                match result {
+                    Ok(_sandbox_id) => {}
+                    Err(_) => {}
+                }
+            }
+            Message::StopSandbox { sandbox_id } => {
+                if let Some(mut client) = self.grpc_client.take() {
+                    return Task::perform(
+                        async move {
+                            let result = client.stop_sandbox(sandbox_id, false).await;
+                            (client, result)
+                        },
+                        |(client, result)| {
+                            Message::StopSandboxResult(
+                                result.map(|_| ()).map_err(|e| e.to_string()),
+                                client,
+                            )
+                        },
+                    );
+                }
+            }
+            Message::StopSandboxResult(result, client) => {
+                self.grpc_client = Some(client);
+                match result {
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            Message::HistoryLoaded(result, client) => {
+                self.grpc_client = Some(client);
+                self.loading_state = LoadingState::Idle;
+                match result {
+                    Ok(history) => {
+                        self.run_history = history;
+                    }
+                    Err(_) => {}
+                }
             }
         }
         Task::none()
@@ -337,6 +489,24 @@ impl HopsGui {
 
         let title = text("HOPS").size(28);
 
+        let status_text = match self.daemon_status {
+            DaemonStatus::Connected => text("● Connected").style(|_theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(iced::Color::from_rgb(0.0, 0.8, 0.0)),
+                }
+            }),
+            DaemonStatus::Offline => text("● Offline").style(|_theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(iced::Color::from_rgb(0.8, 0.0, 0.0)),
+                }
+            }),
+            DaemonStatus::Unknown => text("● Unknown").style(|_theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(iced::Color::from_rgb(0.6, 0.6, 0.0)),
+                }
+            }),
+        };
+
         let profiles_btn = button(text("Profiles"))
             .on_press(Message::SwitchView(ViewMode::ProfileList))
             .width(Length::Fill);
@@ -345,7 +515,7 @@ impl HopsGui {
             .on_press(Message::SwitchView(ViewMode::RunHistory))
             .width(Length::Fill);
 
-        let sidebar_content = column![title, profiles_btn, history_btn]
+        let sidebar_content = column![title, status_text, profiles_btn, history_btn]
             .spacing(15)
             .padding(20)
             .width(200);
@@ -366,4 +536,11 @@ impl HopsGui {
             })
             .into()
     }
+}
+
+fn format_timestamp(unix_seconds: i64) -> String {
+    if unix_seconds == 0 {
+        return "N/A".to_string();
+    }
+    "timestamp".to_string()
 }

@@ -1,0 +1,5 @@
+name = "test-invalid"
+version = "1.0.0"
+
+[capabilities]
+filesystem = ["read", "invalid_capability"]

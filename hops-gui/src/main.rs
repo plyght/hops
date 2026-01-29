@@ -1,4 +1,5 @@
 mod app;
+mod grpc_client;
 mod models;
 mod utils;
 mod views;

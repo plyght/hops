@@ -8,6 +8,7 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+import Foundation
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -104,6 +105,44 @@ public enum Hops_NetworkAccess: SwiftProtobuf.Enum, Swift.CaseIterable {
     .outbound,
     .loopback,
     .full,
+  ]
+
+}
+
+public enum Hops_OutputType: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case stdout // = 0
+  case stderr // = 1
+  case exit // = 2
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .stdout
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .stdout
+    case 1: self = .stderr
+    case 2: self = .exit
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .stdout: return 0
+    case .stderr: return 1
+    case .exit: return 2
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Hops_OutputType] = [
+    .stdout,
+    .stderr,
+    .exit,
   ]
 
 }
@@ -446,6 +485,35 @@ public struct Hops_ResourceUsage: Sendable {
   public init() {}
 }
 
+public struct Hops_OutputChunk: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var sandboxID: String = String()
+
+  public var type: Hops_OutputType = .stdout
+
+  public var data: Data = Data()
+
+  public var timestamp: Int64 = 0
+
+  public var exitCode: Int32 {
+    get {return _exitCode ?? 0}
+    set {_exitCode = newValue}
+  }
+  /// Returns true if `exitCode` has been explicitly set.
+  public var hasExitCode: Bool {return self._exitCode != nil}
+  /// Clears the value of `exitCode`. Subsequent reads from it will return its default value.
+  public mutating func clearExitCode() {self._exitCode = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _exitCode: Int32? = nil
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "hops"
@@ -456,6 +524,10 @@ extension Hops_SandboxState: SwiftProtobuf._ProtoNameProviding {
 
 extension Hops_NetworkAccess: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0NETWORK_ACCESS_DISABLED\0\u{1}NETWORK_ACCESS_OUTBOUND\0\u{1}NETWORK_ACCESS_LOOPBACK\0\u{1}NETWORK_ACCESS_FULL\0")
+}
+
+extension Hops_OutputType: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0OUTPUT_TYPE_STDOUT\0\u{1}OUTPUT_TYPE_STDERR\0\u{1}OUTPUT_TYPE_EXIT\0")
 }
 
 extension Hops_RunRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -1067,6 +1139,60 @@ extension Hops_ResourceUsage: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
     if lhs.cpuPercent != rhs.cpuPercent {return false}
     if lhs.memoryBytes != rhs.memoryBytes {return false}
     if lhs.processCount != rhs.processCount {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Hops_OutputChunk: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".OutputChunk"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}sandbox_id\0\u{1}type\0\u{1}data\0\u{1}timestamp\0\u{3}exit_code\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sandboxID) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.type) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self.data) }()
+      case 4: try { try decoder.decodeSingularInt64Field(value: &self.timestamp) }()
+      case 5: try { try decoder.decodeSingularInt32Field(value: &self._exitCode) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.sandboxID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sandboxID, fieldNumber: 1)
+    }
+    if self.type != .stdout {
+      try visitor.visitSingularEnumField(value: self.type, fieldNumber: 2)
+    }
+    if !self.data.isEmpty {
+      try visitor.visitSingularBytesField(value: self.data, fieldNumber: 3)
+    }
+    if self.timestamp != 0 {
+      try visitor.visitSingularInt64Field(value: self.timestamp, fieldNumber: 4)
+    }
+    try { if let v = self._exitCode {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 5)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Hops_OutputChunk, rhs: Hops_OutputChunk) -> Bool {
+    if lhs.sandboxID != rhs.sandboxID {return false}
+    if lhs.type != rhs.type {return false}
+    if lhs.data != rhs.data {return false}
+    if lhs.timestamp != rhs.timestamp {return false}
+    if lhs._exitCode != rhs._exitCode {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

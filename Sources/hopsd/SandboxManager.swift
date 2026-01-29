@@ -118,6 +118,76 @@ actor SandboxManager {
         )
     }
     
+    func runSandboxStreaming(
+        id: String,
+        policy: Policy,
+        command: [String],
+        rootfs: URL
+    ) -> AsyncThrowingStream<StreamingOutputChunk, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    guard let vmm = vmm else {
+                        throw SandboxManagerError.vmmNotInitialized
+                    }
+                    
+                    if containers[id] != nil {
+                        throw SandboxManagerError.containerAlreadyExists(id)
+                    }
+                    
+                    logger.info("Creating container with streaming", metadata: [
+                        "id": "\(id)",
+                        "policy": "\(policy.name)",
+                        "rootfs": "\(rootfs.path)"
+                    ])
+                    
+                    let rootfsMount = Mount.block(
+                        format: "ext4",
+                        source: rootfs.path,
+                        destination: "/"
+                    )
+                    
+                    let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
+                        CapabilityEnforcer.configure(
+                            config: &config,
+                            policy: policy,
+                            command: command
+                        )
+                    }
+                    
+                    containers[id] = container
+                    containerInfo[id] = ContainerMetadata(
+                        policyName: policy.name,
+                        startedAt: Date()
+                    )
+                    
+                    try await container.create()
+                    logger.info("Container created", metadata: ["id": "\(id)"])
+                    
+                    try await container.start()
+                    logger.info("Container started", metadata: ["id": "\(id)"])
+                    
+                    let status = try await container.wait()
+                    let exitCode = Int(status.exitCode)
+                    
+                    await handleContainerExit(id: id, exitCode: exitCode)
+                    
+                    continuation.yield(StreamingOutputChunk(
+                        sandboxId: id,
+                        type: .exit,
+                        data: Data(),
+                        timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+                        exitCode: Int32(exitCode)
+                    ))
+                    
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
     func stopSandbox(id: String) async throws {
         guard let container = containers[id] else {
             throw SandboxManagerError.containerNotFound(id)
@@ -226,12 +296,73 @@ struct ContainerStatistics: Codable, Sendable {
     let networkTxBytes: UInt64
 }
 
+struct StreamingOutputChunk: Sendable {
+    let sandboxId: String
+    let type: StreamingOutputType
+    let data: Data
+    let timestamp: Int64
+    let exitCode: Int32?
+    
+    init(sandboxId: String, type: StreamingOutputType, data: Data, timestamp: Int64, exitCode: Int32? = nil) {
+        self.sandboxId = sandboxId
+        self.type = type
+        self.data = data
+        self.timestamp = timestamp
+        self.exitCode = exitCode
+    }
+}
+
+enum StreamingOutputType: Sendable {
+    case stdout
+    case stderr
+    case exit
+}
+
 enum SandboxManagerError: Error {
     case vmmNotInitialized
     case containerAlreadyExists(String)
     case containerNotFound(String)
     case missingKernel(String)
     case missingInitfs(String)
+}
+
+extension SandboxManagerError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .vmmNotInitialized:
+            return "Virtual Machine Manager not initialized. The daemon may not have started correctly."
+        case .containerAlreadyExists(let id):
+            return "Container '\(id)' already exists. Choose a different container ID or stop the existing container."
+        case .containerNotFound(let id):
+            return "Container '\(id)' not found. It may have already been stopped or never started."
+        case .missingKernel(let path):
+            return """
+            vmlinux not found at \(path)
+            
+            The Containerization framework requires a Linux kernel image to run containers.
+            
+            To install the kernel:
+            1. Download from Apple Container releases: https://github.com/apple/container/releases
+            2. Place the vmlinux file at: \(path)
+            3. Set permissions: chmod 644 \(path)
+            
+            See docs/setup.md for detailed installation instructions.
+            """
+        case .missingInitfs(let path):
+            return """
+            initfs not found at \(path)
+            
+            The Containerization framework requires an initial filesystem to boot containers.
+            
+            To install the initfs:
+            1. Download init.block from Apple Container releases: https://github.com/apple/container/releases
+            2. Rename and place at: \(path)
+            3. Set permissions: chmod 644 \(path)
+            
+            See docs/setup.md for detailed installation instructions.
+            """
+        }
+    }
 }
 
 extension UInt64 {

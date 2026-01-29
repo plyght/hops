@@ -8,3 +8,12 @@ iced = { version = "0.13", features = ["tokio"] }
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net"] }
+tower = "0.4"
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+[build-dependencies]
+tonic-build = "0.12"

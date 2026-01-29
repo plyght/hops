@@ -141,31 +141,252 @@ Array of: `read`, `write`, `execute`
 - `ro` - Read-only
 - `rw` - Read-write
 
-## Kernel Configuration (Required for Apple Containerization)
+## Kernel and Initfs Configuration
 
-Apple's Containerization framework requires kernel extensions and initfs configuration.
+Apple's Containerization framework requires a Linux kernel image (vmlinux) and an initial filesystem (initfs) to boot lightweight VMs for each container. These files must be present before the daemon can start.
 
-### 1. Enable System Integrity Protection (SIP) Modifications
+### Overview
 
-**WARNING**: This reduces system security. Only proceed if you understand the implications.
+The `hopsd` daemon expects to find:
+- **Kernel**: `~/.hops/vmlinux` - Linux ARM64 kernel image
+- **Initfs**: `~/.hops/initfs` - Initial root filesystem (ext4 block device)
 
-Reboot into Recovery Mode (hold Power button → Options → Recovery):
+Without these files, the daemon will fail to start with an error message indicating the missing file path.
+
+### Option 1: Download Pre-Built Kernel and Initfs (Recommended)
+
+The Apple Container project provides pre-built kernel and initfs images as release artifacts.
+
+#### Download from Apple Container Releases
+
+1. Visit [Apple Container Releases](https://github.com/apple/container/releases)
+2. Download the latest release artifacts:
+   - `vmlinux` (Linux kernel for ARM64)
+   - `init.block` (initial filesystem)
+
+3. Create Hops directory and install files:
 
 ```bash
-csrutil enable --without kext
+mkdir -p ~/.hops
+mv ~/Downloads/vmlinux ~/.hops/vmlinux
+mv ~/Downloads/init.block ~/.hops/initfs
+chmod 644 ~/.hops/vmlinux
+chmod 644 ~/.hops/initfs
 ```
 
-Reboot normally.
-
-### 2. Verify Containerization Framework
+4. Verify files are in place:
 
 ```bash
-ls /System/Library/PrivateFrameworks/Containerization.framework
+ls -lh ~/.hops/vmlinux ~/.hops/initfs
+file ~/.hops/vmlinux
+file ~/.hops/initfs
 ```
 
-If not present, your macOS version may not support Containerization.
+Expected output:
+```
+~/.hops/vmlinux: Linux kernel ARM64 boot executable Image
+~/.hops/initfs: Linux rev 1.0 ext4 filesystem data
+```
 
-### 3. Grant Full Disk Access
+### Option 2: Build Kernel and Initfs from Source
+
+If you need custom kernel configuration (e.g., enabling Landlock, custom modules), you can build from the Apple Containerization framework source.
+
+#### Prerequisites
+
+- **macOS 15+** (Sequoia or later)
+- **Xcode Command Line Tools**: `xcode-select --install`
+- **Swift 6.0+**: `swift --version`
+- **Cross-compilation toolchain**: Will be downloaded automatically
+- **Disk space**: ~5 GB for build artifacts
+- **Time**: ~30-45 minutes on Apple Silicon
+
+#### Build Steps
+
+1. Clone the Apple Containerization repository:
+
+```bash
+cd ~/src
+git clone https://github.com/apple/containerization.git
+cd containerization
+```
+
+2. Build the kernel (uses kernel/config-arm64 configuration):
+
+```bash
+cd kernel
+make
+```
+
+This will:
+- Download the Linux kernel source (if not present)
+- Download the ARM64 cross-compilation toolchain
+- Build the kernel with the configuration in `config-arm64`
+- Output: `vmlinux` in the kernel/ directory
+
+3. Build the initfs filesystem:
+
+```bash
+cd ..
+make init.block
+```
+
+This will:
+- Build the `vminitd` init system (Swift-based init daemon)
+- Create an ext4 filesystem image containing vminitd and essential binaries
+- Output: `bin/init.block`
+
+4. Install to Hops:
+
+```bash
+mkdir -p ~/.hops
+cp kernel/vmlinux ~/.hops/vmlinux
+cp bin/init.block ~/.hops/initfs
+chmod 644 ~/.hops/vmlinux
+chmod 644 ~/.hops/initfs
+```
+
+5. Verify installation:
+
+```bash
+ls -lh ~/.hops/vmlinux ~/.hops/initfs
+```
+
+Expected sizes:
+- `vmlinux`: ~30-50 MB
+- `initfs`: ~500 MB (512 MB ext4 block device)
+
+#### Custom Kernel Configuration
+
+To enable additional kernel features (e.g., Landlock LSM):
+
+1. Edit the kernel configuration:
+
+```bash
+cd ~/src/containerization/kernel
+make menuconfig
+```
+
+2. Enable desired features:
+   - Security options → Landlock support
+   - File systems → Overlay filesystem support
+   - Network options → Advanced routing
+
+3. Save configuration:
+
+```bash
+make savedefconfig
+mv defconfig config-arm64
+```
+
+4. Rebuild kernel:
+
+```bash
+make clean
+make
+```
+
+5. Reinstall to Hops:
+
+```bash
+cp vmlinux ~/.hops/vmlinux
+```
+
+### Verification
+
+After installing the kernel and initfs, verify the daemon can start:
+
+```bash
+hopsd --socket ~/.hops/hops.sock
+```
+
+Expected output:
+```
+Sandbox manager initialized
+VirtualMachineManager initialized
+hopsd listening on unix:///Users/YOUR_USERNAME/.hops/hops.sock
+```
+
+If the daemon fails to start:
+
+**Missing vmlinux**:
+```
+Error: vmlinux not found at /Users/YOUR_USERNAME/.hops/vmlinux
+See docs/setup.md for kernel installation instructions.
+```
+
+**Missing initfs**:
+```
+Error: initfs not found at /Users/YOUR_USERNAME/.hops/initfs
+See docs/setup.md for initfs installation instructions.
+```
+
+### Troubleshooting
+
+#### Kernel file is corrupted or wrong architecture
+
+```bash
+file ~/.hops/vmlinux
+```
+
+Must show: `Linux kernel ARM64 boot executable Image`
+
+If not, re-download or rebuild the kernel.
+
+#### Initfs is not a valid ext4 filesystem
+
+```bash
+file ~/.hops/initfs
+```
+
+Must show: `Linux rev 1.0 ext4 filesystem data`
+
+Verify with:
+```bash
+hdiutil attach -readonly ~/.hops/initfs
+ls /Volumes/initfs
+hdiutil detach /Volumes/initfs
+```
+
+Should contain: `/sbin/init`, `/bin/`, `/lib/`, `/etc/`
+
+#### Kernel build fails
+
+Common issues:
+- **Out of disk space**: Kernel build requires ~5 GB. Free up space and retry.
+- **Network issues downloading kernel source**: Check network connection and retry.
+- **Missing build tools**: Install Xcode Command Line Tools: `xcode-select --install`
+
+Check kernel build logs:
+```bash
+cd ~/src/containerization/kernel
+make clean
+make V=1 2>&1 | tee build.log
+```
+
+### Alternative Kernel Locations
+
+By default, Hops expects kernel/initfs at `~/.hops/`. If you want to use a different location, you can:
+
+1. Create symlinks:
+
+```bash
+ln -s /path/to/custom/vmlinux ~/.hops/vmlinux
+ln -s /path/to/custom/initfs ~/.hops/initfs
+```
+
+2. Modify SandboxManager initialization (requires rebuilding Hops):
+
+Edit `Sources/hopsd/SandboxManager.swift` lines 27-28 to point to custom paths.
+
+### Security Considerations
+
+- **Kernel updates**: Regularly update your kernel to receive security patches
+- **Custom kernels**: Only use custom kernels if you understand the security implications
+- **File permissions**: Keep kernel/initfs files readable only by your user (644 or 600)
+- **Verification**: Always verify checksums of downloaded kernel/initfs files from Apple releases
+
+### Grant Full Disk Access (Required)
 
 System Settings → Privacy & Security → Full Disk Access → Add:
 - `/usr/local/bin/hopsd`

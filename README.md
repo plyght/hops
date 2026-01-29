@@ -16,8 +16,9 @@ Hops isolates processes in controlled sandbox environments using [Apple's Contai
 - **Apple Silicon** (M1/M2/M3/M4)
 - **Swift 6.0+**
 - **Rust 1.75+** (for GUI only)
+- **Linux Kernel and Initfs** (required for container execution)
 
-> **Note**: The Containerization framework requires a Linux kernel image and init filesystem. See [docs/setup.md](docs/setup.md) for details.
+> **Important**: Before running containers, you must install a Linux kernel image (`vmlinux`) and initial filesystem (`initfs`) to `~/.hops/`. The daemon cannot start without these files. Download pre-built versions from [Apple Container releases](https://github.com/apple/container/releases) or build from source following instructions in [docs/setup.md](docs/setup.md#kernel-and-initfs-configuration).
 
 ## Features
 
@@ -69,7 +70,7 @@ cp target/release/hops-gui /usr/local/bin/
 # Start the daemon
 hops system start
 
-# Run a command in a sandbox
+# Run a command in a sandbox with real-time output streaming (default)
 hops run ./project -- python script.py
 
 # Run with a named profile
@@ -77,6 +78,9 @@ hops run --profile untrusted ./code -- bun test
 
 # Run with inline resource limits
 hops run --network disabled --memory 512M --cpus 2 ./project -- cargo build
+
+# Disable streaming for quick execution (no output capture)
+hops run --stream=false ./project -- echo "hello"
 
 # Manage profiles
 hops profile list

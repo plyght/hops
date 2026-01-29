@@ -4,6 +4,7 @@ package hops;
 
 service HopsService {
   rpc RunSandbox(RunRequest) returns (RunResponse);
+  rpc RunSandboxStreaming(RunRequest) returns (stream OutputChunk);
   rpc StopSandbox(StopRequest) returns (StopResponse);
   rpc ListSandboxes(ListRequest) returns (ListResponse);
   rpc GetStatus(StatusRequest) returns (SandboxStatus);
@@ -110,4 +111,18 @@ message ResourceUsage {
   double cpu_percent = 1;
   uint64 memory_bytes = 2;
   int32 process_count = 3;
+}
+
+message OutputChunk {
+  string sandbox_id = 1;
+  OutputType type = 2;
+  bytes data = 3;
+  int64 timestamp = 4;
+  optional int32 exit_code = 5;
+}
+
+enum OutputType {
+  OUTPUT_TYPE_STDOUT = 0;
+  OUTPUT_TYPE_STDERR = 1;
+  OUTPUT_TYPE_EXIT = 2;
 }

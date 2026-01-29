@@ -45,6 +45,9 @@ struct RunCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable verbose output")
     var verbose: Bool = false
     
+    @Flag(name: .long, help: "Enable streaming output (default: true)")
+    var stream: Bool = true
+    
     @Argument(parsing: .remaining, help: "Command to execute inside the sandbox")
     var command: [String] = []
     
@@ -138,26 +141,19 @@ struct RunCommand: AsyncParsableCommand {
     ) async throws -> Int32 {
         let client = try await DaemonClient.connect()
         
-        let request = SandboxExecuteRequest(
-            sandboxRoot: sandboxPath,
-            command: command,
-            policy: policy
-        )
-        
-        let response = try await client.execute(request)
-        
-        for try await output in response.outputStream {
-            switch output {
-            case .stdout(let data):
-                FileHandle.standardOutput.write(data)
-            case .stderr(let data):
-                FileHandle.standardError.write(data)
-            case .exitCode(let code):
-                return code
-            }
+        if stream {
+            return try await client.executeStreaming(
+                sandboxPath: sandboxPath,
+                command: command,
+                policy: policy
+            )
+        } else {
+            return try await client.execute(
+                sandboxPath: sandboxPath,
+                command: command,
+                policy: policy
+            )
         }
-        
-        return 1
     }
     
     private func expandPath(_ path: String) -> String {
@@ -216,11 +212,11 @@ struct RunCommand: AsyncParsableCommand {
 }
 
 struct DaemonClient {
-    private let client: Hops_HopsServiceNIOClient
+    private let client: Hops_HopsServiceAsyncClient
     private let group: MultiThreadedEventLoopGroup
     private let channel: GRPCChannel
     
-    private init(client: Hops_HopsServiceNIOClient, group: MultiThreadedEventLoopGroup, channel: GRPCChannel) {
+    private init(client: Hops_HopsServiceAsyncClient, group: MultiThreadedEventLoopGroup, channel: GRPCChannel) {
         self.client = client
         self.group = group
         self.channel = channel
@@ -241,7 +237,7 @@ struct DaemonClient {
             eventLoopGroup: group
         )
         
-        let client = Hops_HopsServiceNIOClient(
+        let client = Hops_HopsServiceAsyncClient(
             channel: channel,
             defaultCallOptions: CallOptions()
         )
@@ -249,12 +245,65 @@ struct DaemonClient {
         return DaemonClient(client: client, group: group, channel: channel)
     }
     
-    func execute(_ request: SandboxExecuteRequest) async throws -> SandboxExecuteResponse {
+    func execute(
+        sandboxPath: String,
+        command: [String],
+        policy: Policy
+    ) async throws -> Int32 {
         var runRequest = Hops_RunRequest()
-        runRequest.command = request.command
-        runRequest.workingDirectory = request.sandboxRoot
+        runRequest.command = command
+        runRequest.workingDirectory = sandboxPath
+        runRequest.inlinePolicy = buildProtoPolicy(policy)
         
-        let policy = request.policy
+        let response = try await client.runSandbox(runRequest)
+        
+        guard response.success else {
+            throw DaemonClientError.executionFailed(response.error)
+        }
+        
+        return 0
+    }
+    
+    func executeStreaming(
+        sandboxPath: String,
+        command: [String],
+        policy: Policy
+    ) async throws -> Int32 {
+        var runRequest = Hops_RunRequest()
+        runRequest.command = command
+        runRequest.workingDirectory = sandboxPath
+        runRequest.inlinePolicy = buildProtoPolicy(policy)
+        
+        let responseStream = client.runSandboxStreaming(runRequest)
+        var exitCode: Int32 = 1
+        
+        for try await chunk in responseStream {
+            switch chunk.type {
+            case .stdout:
+                if !chunk.data.isEmpty {
+                    FileHandle.standardOutput.write(chunk.data)
+                }
+            case .stderr:
+                if !chunk.data.isEmpty {
+                    FileHandle.standardError.write(chunk.data)
+                }
+            case .exit:
+                if chunk.hasExitCode {
+                    exitCode = chunk.exitCode
+                }
+            case .UNRECOGNIZED:
+                break
+            }
+        }
+        
+        return exitCode
+    }
+    
+    func close() async throws {
+        try await group.shutdownGracefully()
+    }
+    
+    private func buildProtoPolicy(_ policy: Policy) -> Hops_Policy {
         var protoPolicy = Hops_Policy()
         
         var capabilities = Hops_Capabilities()
@@ -285,32 +334,7 @@ struct DaemonClient {
         
         protoPolicy.resources = protoResources
         
-        runRequest.inlinePolicy = protoPolicy
-        
-        let call = client.runSandbox(runRequest, callOptions: nil)
-        
-        let response = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Hops_RunResponse, Error>) in
-            call.response.whenComplete { result in
-                continuation.resume(with: result)
-            }
-        }
-        
-        guard response.success else {
-            throw DaemonClientError.executionFailed(response.error)
-        }
-        
-        let outputStream = AsyncThrowingStream<OutputChunk, Error> { continuation in
-            Task {
-                continuation.yield(.exitCode(0))
-                continuation.finish()
-            }
-        }
-        
-        return SandboxExecuteResponse(outputStream: outputStream)
-    }
-    
-    func close() async throws {
-        try await group.shutdownGracefully()
+        return protoPolicy
     }
     
     private func convertNetworkCapability(_ capability: NetworkCapability) -> Hops_NetworkAccess {
@@ -345,20 +369,4 @@ struct DaemonClient {
 
 enum DaemonClientError: Error {
     case executionFailed(String)
-}
-
-struct SandboxExecuteRequest {
-    let sandboxRoot: String
-    let command: [String]
-    let policy: Policy
-}
-
-struct SandboxExecuteResponse {
-    let outputStream: AsyncThrowingStream<OutputChunk, Error>
-}
-
-enum OutputChunk {
-    case stdout(Data)
-    case stderr(Data)
-    case exitCode(Int32)
 }

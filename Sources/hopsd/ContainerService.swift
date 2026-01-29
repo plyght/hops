@@ -98,6 +98,53 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         }
     }
     
+    nonisolated func runSandboxStreaming(
+        request: Hops_RunRequest,
+        responseStream: GRPCAsyncResponseStreamWriter<Hops_OutputChunk>,
+        context: GRPCAsyncServerCallContext
+    ) async throws {
+        guard let manager = await sandboxManager else {
+            throw ContainerServiceError.managerNotAvailable
+        }
+        
+        let sandboxId = UUID().uuidString
+        
+        var policy = Policy.default
+        if request.hasInlinePolicy {
+            policy = try convertProtoPolicy(request.inlinePolicy)
+        }
+        
+        let rootfs = URL(fileURLWithPath: request.workingDirectory)
+        
+        let stream = await manager.runSandboxStreaming(
+            id: sandboxId,
+            policy: policy,
+            command: request.command,
+            rootfs: rootfs
+        )
+        
+        for try await chunk in stream {
+            var protoChunk = Hops_OutputChunk()
+            protoChunk.sandboxID = chunk.sandboxId
+            protoChunk.data = chunk.data
+            protoChunk.timestamp = chunk.timestamp
+            
+            switch chunk.type {
+            case .stdout:
+                protoChunk.type = .stdout
+            case .stderr:
+                protoChunk.type = .stderr
+            case .exit:
+                protoChunk.type = .exit
+                if let exitCode = chunk.exitCode {
+                    protoChunk.exitCode = exitCode
+                }
+            }
+            
+            try await responseStream.send(protoChunk)
+        }
+    }
+    
     nonisolated func stopSandbox(
         request: Hops_StopRequest,
         context: GRPCAsyncServerCallContext

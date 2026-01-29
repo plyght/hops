@@ -1,0 +1,13 @@
+name = "test-basic"
+version = "1.0.0"
+description = "Basic test policy"
+
+[capabilities]
+network = "disabled"
+filesystem = ["read"]
+allowed_paths = ["/usr"]
+denied_paths = []
+
+[sandbox]
+root_path = "/"
+working_directory = "/"

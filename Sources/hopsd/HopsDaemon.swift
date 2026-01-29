@@ -26,8 +26,16 @@ actor HopsDaemon {
         try prepareSocketDirectory()
         removeExistingSocket()
         
-        sandboxManager = try await SandboxManager()
-        print("Sandbox manager initialized")
+        do {
+            sandboxManager = try await SandboxManager()
+            print("Sandbox manager initialized")
+        } catch let error as SandboxManagerError {
+            print("Error: \(error.localizedDescription)")
+            throw error
+        } catch {
+            print("Failed to initialize sandbox manager: \(error)")
+            throw error
+        }
         
         containerService = ContainerService(
             socketPath: socketPath,

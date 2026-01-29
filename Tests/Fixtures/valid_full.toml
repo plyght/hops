@@ -1,0 +1,40 @@
+name = "test-full"
+version = "2.1.3"
+description = "Full featured test policy"
+
+[capabilities]
+network = "outbound"
+filesystem = ["read", "write", "execute"]
+allowed_paths = ["/usr", "/tmp", "/var"]
+denied_paths = ["/etc/shadow"]
+
+[capabilities.resource_limits]
+cpus = 4
+memory_bytes = 4294967296
+max_processes = 256
+
+[sandbox]
+root_path = "/"
+hostname = "test-sandbox"
+working_directory = "/tmp"
+
+[[sandbox.mounts]]
+source = "/usr"
+destination = "/usr"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/tmp"
+type = "tmpfs"
+mode = "rw"
+options = ["size=100m"]
+
+[sandbox.environment]
+PATH = "/usr/bin:/bin"
+HOME = "/root"
+
+[metadata]
+author = "test"
+purpose = "testing"
