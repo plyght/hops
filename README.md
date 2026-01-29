@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/images/hops.png" alt="Hops" width="80" />
+</p>
+
 # Hops
 
 Lightweight sandboxing for untrusted code on macOS. Hops provides process isolation with fine-grained capability control, letting you run untrusted code safely with filesystem, network, and resource restrictions.
