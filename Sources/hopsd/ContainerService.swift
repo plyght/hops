@@ -91,16 +91,8 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
         if let imageConfig = try await imageManager.getImageConfig(ociImage) {
           policy = applyOCIConfig(policy: policy, config: imageConfig)
         }
-      } else if let policyRootfs = policy.rootfs {
-        if policyRootfs.hasPrefix("/") || policyRootfs.hasPrefix("~") {
-          let expandedPath = NSString(string: policyRootfs).expandingTildeInPath
-          rootfs = URL(fileURLWithPath: expandedPath)
-        } else {
-          rootfs =
-            homeDir
-            .appendingPathComponent(".hops")
-            .appendingPathComponent(policyRootfs)
-        }
+      } else if let resolvedRootfs = PathUtils.resolveRootfsPath(policy.rootfs) {
+        rootfs = resolvedRootfs
       } else {
         rootfs = defaultRootfs
       }
@@ -174,16 +166,8 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
       if let imageConfig = try await imageManager.getImageConfig(ociImage) {
         policy = applyOCIConfig(policy: policy, config: imageConfig)
       }
-    } else if let policyRootfs = policy.rootfs {
-      if policyRootfs.hasPrefix("/") || policyRootfs.hasPrefix("~") {
-        let expandedPath = NSString(string: policyRootfs).expandingTildeInPath
-        rootfs = URL(fileURLWithPath: expandedPath)
-      } else {
-        rootfs =
-          homeDir
-          .appendingPathComponent(".hops")
-          .appendingPathComponent(policyRootfs)
-      }
+    } else if let resolvedRootfs = PathUtils.resolveRootfsPath(policy.rootfs) {
+      rootfs = resolvedRootfs
     } else {
       rootfs = defaultRootfs
     }
@@ -351,7 +335,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
       }
 
       if !protoRes.memory.isEmpty {
-        resourceLimits.memoryBytes = parseMemoryString(protoRes.memory)
+        resourceLimits.memoryBytes = try parseMemoryString(protoRes.memory)
       }
 
       if protoRes.maxProcesses > 0 {
@@ -383,7 +367,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
     }
   }
 
-  private nonisolated func parseMemoryString(_ memory: String) -> UInt64 {
+  private nonisolated func parseMemoryString(_ memory: String) throws -> UInt64 {
     let upper = memory.uppercased()
     var multiplier: UInt64 = 1
     var numericPart = upper
@@ -400,8 +384,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
     }
 
     guard let value = UInt64(numericPart) else {
-      print("WARNING: Invalid memory string '\(memory)', defaulting to 512MB")
-      return 512 * 1024 * 1024
+      throw ContainerServiceError.invalidMemoryFormat(memory)
     }
 
     return value * multiplier
@@ -452,6 +435,7 @@ actor ContainerService: Hops_HopsServiceAsyncProvider {
 enum ContainerServiceError: Error {
   case managerNotAvailable
   case rootfsNotFound(String)
+  case invalidMemoryFormat(String)
 }
 
 extension ContainerServiceError: LocalizedError {
@@ -468,6 +452,18 @@ extension ContainerServiceError: LocalizedError {
 
         Create a rootfs image with: hops rootfs create alpine
         Or specify a different rootfs in the policy TOML file.
+        """
+    case .invalidMemoryFormat(let value):
+      return """
+        Invalid memory format: '\(value)'
+        
+        Valid formats:
+          - Bytes: 1048576 or 1048576B
+          - Kilobytes: 1024K or 1024KB
+          - Megabytes: 512M or 512MB
+          - Gigabytes: 4G or 4GB
+        
+        Examples: 512M, 1G, 2048MB
         """
     }
   }

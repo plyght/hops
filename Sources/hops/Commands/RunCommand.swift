@@ -684,3 +684,9 @@ enum DaemonClientError: Error, CustomStringConvertible {
     }
   }
 }
+
+extension DaemonClientError: LocalizedError {
+  var errorDescription: String? {
+    return description
+  }
+}

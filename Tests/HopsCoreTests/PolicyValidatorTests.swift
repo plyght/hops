@@ -622,4 +622,148 @@ final class PolicyValidatorTests: XCTestCase {
 
     XCTAssertNoThrow(try validator.validate(policy))
   }
+
+  func testSymlinkToSensitivePathInMountSourceThrows() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+    let symlinkPath = tempDir.appendingPathComponent("test-symlink-\(UUID())")
+    let targetPath = "/etc/shadow"
+    
+    try FileManager.default.createSymbolicLink(
+      at: symlinkPath,
+      withDestinationURL: URL(fileURLWithPath: targetPath)
+    )
+    defer { try? FileManager.default.removeItem(at: symlinkPath) }
+    
+    let mount = MountConfig(
+      source: symlinkPath.path,
+      destination: "/mnt/test",
+      type: .bind,
+      mode: .readOnly
+    )
+    
+    let policy = Policy(
+      name: "test",
+      version: "1.0.0",
+      capabilities: CapabilityGrant.default,
+      sandbox: SandboxConfig(
+        rootPath: "/",
+        mounts: [mount],
+        hostname: "test",
+        workingDirectory: "/",
+        environment: [:]
+      )
+    )
+    
+    XCTAssertThrowsError(try validator.validate(policy)) { error in
+      if case PolicyValidationError.insecureMountConfiguration(let msg) = error {
+        XCTAssertTrue(msg.contains("Read-write access") || msg.contains("shadow"))
+      } else {
+        XCTFail("Expected insecureMountConfiguration error, got \(error)")
+      }
+    }
+  }
+
+  func testPathTraversalInAllowedPathsThrows() throws {
+    let policy = Policy(
+      name: "test",
+      version: "1.0.0",
+      capabilities: CapabilityGrant(
+        network: .disabled,
+        filesystem: [.read],
+        allowedPaths: ["/usr/../etc/shadow"],
+        deniedPaths: [],
+        resourceLimits: ResourceLimits()
+      )
+    )
+    
+    XCTAssertThrowsError(try validator.validate(policy)) { error in
+      XCTAssertTrue(error is PolicyValidationError, "Expected PolicyValidationError")
+    }
+  }
+
+  func testRelativePathInMountSourceThrows() throws {
+    let mount = MountConfig(
+      source: "../etc/shadow",
+      destination: "/mnt/test",
+      type: .bind,
+      mode: .readOnly
+    )
+    
+    let policy = Policy(
+      name: "test",
+      version: "1.0.0",
+      capabilities: CapabilityGrant.default,
+      sandbox: SandboxConfig(
+        rootPath: "/",
+        mounts: [mount],
+        hostname: "test",
+        workingDirectory: "/",
+        environment: [:]
+      )
+    )
+    
+    XCTAssertThrowsError(try validator.validate(policy)) { error in
+      if case PolicyValidationError.mountSourceNotAbsolute = error {
+        XCTAssertTrue(true)
+      } else {
+        XCTFail("Expected mountSourceNotAbsolute error, got \(error)")
+      }
+    }
+  }
+
+  func testMountingSensitivePathDirectlyThrows() throws {
+    let mount = MountConfig(
+      source: "/etc/shadow",
+      destination: "/mnt/shadow",
+      type: .bind,
+      mode: .readWrite
+    )
+    
+    let policy = Policy(
+      name: "test",
+      version: "1.0.0",
+      capabilities: CapabilityGrant.default,
+      sandbox: SandboxConfig(
+        rootPath: "/",
+        mounts: [mount],
+        hostname: "test",
+        workingDirectory: "/",
+        environment: [:]
+      )
+    )
+    
+    XCTAssertThrowsError(try validator.validate(policy)) { error in
+      if case PolicyValidationError.insecureMountConfiguration(let msg) = error {
+        XCTAssertTrue(msg.contains("Read-write access"))
+      } else {
+        XCTFail("Expected insecureMountConfiguration error")
+      }
+    }
+  }
+
+  func testNonExistentMountSourceThrows() throws {
+    let mount = MountConfig(
+      source: "/nonexistent/path/that/does/not/exist",
+      destination: "/mnt/test",
+      type: .bind,
+      mode: .readOnly
+    )
+    
+    let policy = Policy(
+      name: "test",
+      version: "1.0.0",
+      capabilities: CapabilityGrant.default,
+      sandbox: SandboxConfig(
+        rootPath: "/",
+        mounts: [mount],
+        hostname: "test",
+        workingDirectory: "/",
+        environment: [:]
+      )
+    )
+    
+    XCTAssertThrowsError(try validator.validate(policy)) { error in
+      XCTAssertTrue(error is PolicyValidationError, "Expected PolicyValidationError for non-existent mount source")
+    }
+  }
 }

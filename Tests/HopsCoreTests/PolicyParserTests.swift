@@ -554,4 +554,186 @@ final class PolicyParserTests: XCTestCase {
     let policy = try parser.parse(fromString: toml)
     XCTAssertNil(policy.rootfs)
   }
+
+  func testParseInvalidTOMLSyntaxThrowsInvalidTOMLError() {
+    let toml = """
+      name = "test"
+      [capabilities
+      network = "disabled"
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      if case PolicyParserError.invalidTOML = error {
+        XCTAssertTrue(true)
+      } else {
+        XCTFail("Expected invalidTOML error, got \(error)")
+      }
+    }
+  }
+
+  func testParseNegativeResourceLimitsThrowsError() {
+    let toml = """
+      name = "test"
+
+      [capabilities.resource_limits]
+      cpus = -1
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      XCTAssertTrue(error is PolicyParserError, "Expected PolicyParserError for negative cpus")
+    }
+  }
+
+  func testParseZeroCPUsAccepted() throws {
+    let toml = """
+      name = "test"
+
+      [capabilities.resource_limits]
+      cpus = 0
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertEqual(policy.capabilities.resourceLimits.cpus, 0)
+  }
+
+  func testParseInvalidTOMLTypeForNetworkThrowsError() {
+    let toml = """
+      name = "test"
+
+      [capabilities]
+      network = 123
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      XCTAssertTrue(error is PolicyParserError, "Expected PolicyParserError for invalid network type")
+    }
+  }
+
+  func testParseInvalidTOMLTypeForFilesystemThrowsError() {
+    let toml = """
+      name = "test"
+
+      [capabilities]
+      filesystem = "string_instead_of_array"
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      XCTAssertTrue(error is PolicyParserError, "Expected PolicyParserError for invalid filesystem type")
+    }
+  }
+
+  func testParseAllowedPathsNonStringElementThrowsError() {
+    let toml = """
+      name = "test"
+
+      [capabilities]
+      allowed_paths = ["/usr", 123, "/tmp"]
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      XCTAssertTrue(error is PolicyParserError, "Expected PolicyParserError for non-string in allowed_paths")
+    }
+  }
+
+  func testParseDeniedPathsNonStringElementThrowsError() {
+    let toml = """
+      name = "test"
+
+      [capabilities]
+      denied_paths = [true, "/etc/shadow"]
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      XCTAssertTrue(error is PolicyParserError, "Expected PolicyParserError for non-string in denied_paths")
+    }
+  }
+
+  func testParseOverlayMountWithAllRequiredFields() throws {
+    let toml = """
+      name = "test"
+
+      [[sandbox.mounts]]
+      source = "/overlay"
+      destination = "/mnt"
+      type = "overlay"
+      overlay_lower_dir = "/lower"
+      overlay_upper_dir = "/upper"
+      overlay_work_dir = "/work"
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertEqual(policy.sandbox.mounts[0].type, .overlay)
+    XCTAssertEqual(policy.sandbox.mounts[0].overlayLowerDir, "/lower")
+    XCTAssertEqual(policy.sandbox.mounts[0].overlayUpperDir, "/upper")
+    XCTAssertEqual(policy.sandbox.mounts[0].overlayWorkDir, "/work")
+  }
+
+  func testParseOverlayMountMissingRequiredFieldsStillParses() throws {
+    let toml = """
+      name = "test"
+
+      [[sandbox.mounts]]
+      source = "/overlay"
+      destination = "/mnt"
+      type = "overlay"
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertEqual(policy.sandbox.mounts[0].type, .overlay)
+    XCTAssertNil(policy.sandbox.mounts[0].overlayLowerDir)
+  }
+
+  func testParseEmptyEnvironmentDictionary() throws {
+    let toml = """
+      name = "test"
+
+      [sandbox.environment]
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertTrue(policy.sandbox.environment.isEmpty)
+  }
+
+  func testParseEnvironmentVariableWithEmptyValue() throws {
+    let toml = """
+      name = "test"
+
+      [sandbox.environment]
+      EMPTY = ""
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertEqual(policy.sandbox.environment["EMPTY"], "")
+  }
+
+  func testParseEnvironmentVariableWithSpecialCharacters() throws {
+    let toml = """
+      name = "test"
+
+      [sandbox.environment]
+      PATH = "/usr/bin:/bin:$HOME/bin"
+      SPECIAL = "value=with=equals;and;semicolons"
+      """
+
+    let policy = try parser.parse(fromString: toml)
+    XCTAssertEqual(policy.sandbox.environment["PATH"], "/usr/bin:/bin:$HOME/bin")
+    XCTAssertEqual(policy.sandbox.environment["SPECIAL"], "value=with=equals;and;semicolons")
+  }
+
+  func testParseErrorContainsHelpfulMessage() {
+    let toml = """
+      name = "test"
+
+      [capabilities]
+      network = "typo_outbond"
+      """
+
+    XCTAssertThrowsError(try parser.parse(fromString: toml)) { error in
+      let errorMessage = error.localizedDescription
+      XCTAssertTrue(
+        errorMessage.contains("network") || errorMessage.contains("capabilities"),
+        "Error message should mention the field that failed: \(errorMessage)"
+      )
+    }
+  }
 }

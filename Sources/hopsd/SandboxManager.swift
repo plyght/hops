@@ -121,7 +121,7 @@ actor SandboxManager {
     let stdinReader = allocateTty ? EmptyStdinReader() : nil
 
     let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
-      CapabilityEnforcer.configure(
+      try CapabilityEnforcer.configure(
         config: &config,
         policy: policy,
         command: command,
@@ -148,8 +148,19 @@ actor SandboxManager {
     logger.info("Container started", metadata: ["id": "\(id)"])
 
     Task {
-      let status = try await container.wait()
-      await handleContainerExit(id: id, exitCode: Int(status.exitCode))
+      do {
+        let status = try await container.wait()
+        await handleContainerExit(id: id, exitCode: Int(status.exitCode))
+      } catch {
+        logger.error(
+          "Container wait failed",
+          metadata: [
+            "id": "\(id)",
+            "error": "\(error.localizedDescription)"
+          ]
+        )
+        await handleContainerExit(id: id, exitCode: -1)
+      }
     }
 
     return SandboxStatus(
@@ -228,7 +239,7 @@ actor SandboxManager {
           let stdinReader: (any ReaderStream)? = grpcStdinReader
 
           let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
-            CapabilityEnforcer.configure(
+            try CapabilityEnforcer.configure(
               config: &config,
               policy: policy,
               command: command,

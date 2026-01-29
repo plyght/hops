@@ -41,6 +41,12 @@ public enum PolicyValidationError: Error, CustomStringConvertible {
   }
 }
 
+extension PolicyValidationError: LocalizedError {
+  public var errorDescription: String? {
+    return description
+  }
+}
+
 public struct PolicyValidator: Sendable {
   public let maxMemoryBytes: UInt64
   public let maxCPUs: UInt

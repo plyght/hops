@@ -5,6 +5,17 @@ import Foundation
 import HopsCore
 import Logging
 
+enum NetworkConfigurationError: Error, LocalizedError {
+  case natInterfaceCreationFailed(String)
+  
+  var errorDescription: String? {
+    switch self {
+    case .natInterfaceCreationFailed(let details):
+      return "Failed to create NAT network interface: \(details). Check network permissions and system network configuration."
+    }
+  }
+}
+
 enum CapabilityEnforcer {
   static func configure(
     config: inout LinuxContainer.Configuration,
@@ -14,7 +25,7 @@ enum CapabilityEnforcer {
     stderr: (any Writer)? = nil,
     stdin: (any ReaderStream)? = nil,
     allocateTty: Bool = false
-  ) {
+  ) throws {
     let capabilities = policy.capabilities
     let sandbox = policy.sandbox
 
@@ -78,7 +89,7 @@ enum CapabilityEnforcer {
     }
 
     configureResources(config: &config, limits: capabilities.resourceLimits)
-    configureNetwork(config: &config, capability: capabilities.network)
+    try configureNetwork(config: &config, capability: capabilities.network)
     configureMounts(config: &config, policy: policy)
     configureSysctl(config: &config)
   }
@@ -132,7 +143,7 @@ enum CapabilityEnforcer {
   private static func configureNetwork(
     config: inout LinuxContainer.Configuration,
     capability: NetworkCapability
-  ) {
+  ) throws {
     switch capability {
     case .disabled, .loopback:
       config.interfaces = []
@@ -145,7 +156,7 @@ enum CapabilityEnforcer {
         )
         config.interfaces = [natInterface]
       } catch {
-        fatalError("Failed to create NAT interface: \(error)")
+        throw NetworkConfigurationError.natInterfaceCreationFailed(error.localizedDescription)
       }
 
     case .full:
@@ -156,7 +167,7 @@ enum CapabilityEnforcer {
         )
         config.interfaces = [natInterface]
       } catch {
-        fatalError("Failed to create NAT interface: \(error)")
+        throw NetworkConfigurationError.natInterfaceCreationFailed(error.localizedDescription)
       }
     }
   }

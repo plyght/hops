@@ -24,6 +24,12 @@ public enum PolicyParserError: Error, CustomStringConvertible {
   }
 }
 
+extension PolicyParserError: LocalizedError {
+  public var errorDescription: String? {
+    return description
+  }
+}
+
 public struct PolicyParser: Sendable {
   public init() {}
 

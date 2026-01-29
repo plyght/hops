@@ -83,3 +83,9 @@ public enum ProfileManagerError: Error, CustomStringConvertible {
     }
   }
 }
+
+extension ProfileManagerError: LocalizedError {
+  public var errorDescription: String? {
+    return description
+  }
+}
