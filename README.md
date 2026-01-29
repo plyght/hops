@@ -1,185 +1,126 @@
 # Hops
 
-A capability-first sandboxing system for macOS that provides fine-grained control over process execution, filesystem access, network capabilities, and resource limits.
+Lightweight sandboxing for untrusted code on macOS. Hops provides process isolation with fine-grained capability control, letting you run untrusted code safely with filesystem, network, and resource restrictions.
 
 ## Overview
 
-Hops enables secure execution of untrusted or semi-trusted code by enforcing strict capability-based policies. Unlike traditional sandboxing approaches, Hops denies all access by default and requires explicit grants for every capability.
+Hops isolates processes in controlled sandbox environments using Apple's Containerization framework. A background daemon handles sandbox lifecycle while the CLI provides a clean interface for running commands, managing profiles, and controlling the system. Policies define exactly what each sandbox can access.
 
-### Key Features
+## Features
 
-- **Capability-based security**: Deny-all default with explicit grants
-- **Fine-grained filesystem control**: Separate read, write, and execute permissions
-- **Network isolation**: Disabled, loopback, outbound, or full network access
-- **Resource limits**: CPU, memory, and process count constraints
-- **gRPC daemon architecture**: Persistent daemon manages sandbox lifecycle
-- **Profile-based configuration**: Reusable TOML policies for different use cases
+- **Fine-Grained Capabilities**: Control network access (disabled, outbound, loopback, full), filesystem permissions, and process limits per sandbox
+- **Policy-Based Configuration**: Define reusable security profiles in TOML with explicit allow/deny path lists
+- **Resource Limits**: Constrain CPU cores, memory allocation, and maximum process count
+- **Daemon Architecture**: Background service manages sandbox lifecycle with gRPC communication
+- **Profile System**: Create, share, and reuse sandbox configurations across projects
+- **Secure Defaults**: Network disabled, minimal filesystem access, validated mount configurations
 
-## Architecture
-
-Hops consists of three main components:
-
-1. **hops** (CLI): Command-line interface for running sandboxed processes
-2. **hopsd** (Daemon): Background service managing sandbox lifecycle via gRPC
-3. **HopsCore**: Swift library implementing policy parsing and enforcement
-
-```
-┌─────────┐                  ┌──────────┐                  ┌──────────┐
-│  hops   │─── gRPC/Unix ───▶│  hopsd   │─── syscalls ───▶│  Kernel  │
-│  (CLI)  │                  │ (Daemon) │                  │ Sandbox  │
-└─────────┘                  └──────────┘                  └──────────┘
-     │                             │
-     └──── Policy (TOML) ──────────┘
-```
-
-## Requirements
-
-- macOS 26 or later
-- Apple Silicon (arm64)
-- Swift 6.0+
-
-## Quick Start
-
-### Installation
+## Installation
 
 ```bash
+# From source
 git clone https://github.com/plyght/hops.git
 cd hops
 swift build -c release
-cp .build/release/hops /usr/local/bin/
-cp .build/release/hopsd /usr/local/bin/
+sudo cp .build/release/hops /usr/local/bin/
+sudo cp .build/release/hopsd /usr/local/bin/
 ```
 
-### Start the daemon
+## Usage
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.hops.daemon.plist
+# Start the daemon
+hops system start
+
+# Run a command in a sandbox
+hops run ./project -- python script.py
+
+# Run with a named profile
+hops run --profile untrusted ./code -- npm test
+
+# Run with resource limits
+hops run --network disabled --memory 512M --cpus 2 ./project -- cargo build
+
+# Manage profiles
+hops profile list
+hops profile create restrictive --template restrictive
+hops profile show default
 ```
 
-Or manually:
+## Configuration
 
-```bash
-hopsd --socket ~/.hops/hops.sock
-```
+Policies are TOML files defining sandbox behavior:
 
-### Run a sandboxed process
-
-```bash
-hops run --policy config/default.toml -- /usr/bin/curl https://example.com
-```
-
-### Use a permissive development profile
-
-```bash
-hops run --policy config/examples/development.toml -- npm install
-```
-
-### Create a custom policy
-
-```bash
-mkdir -p ~/.hops/profiles
-cat > ~/.hops/profiles/myapp.toml <<EOF
-[sandbox]
-root = "./myapp"
+```toml
+name = "build"
+version = "1.0.0"
+description = "Build environment with network access"
 
 [capabilities]
 network = "outbound"
+filesystem = ["read", "write", "execute"]
+allowed_paths = ["/usr", "/lib", "/bin"]
+denied_paths = ["/etc/shadow", "/root/.ssh"]
 
-[capabilities.filesystem]
-read = ["./myapp", "/usr/lib"]
-write = ["./myapp/data"]
-execute = ["./myapp/bin"]
-
-[resources]
+[capabilities.resource_limits]
 cpus = 4
-memory = "2G"
-max_processes = 100
-EOF
+memory_bytes = 4294967296
+max_processes = 256
 
-hops run --policy ~/.hops/profiles/myapp.toml -- ./myapp/bin/server
-```
-
-## Policy Configuration
-
-Policies are defined in TOML format with three main sections:
-
-### Sandbox
-
-```toml
 [sandbox]
-root = "."  # Root directory for the sandboxed process
+root_path = "/"
+hostname = "build-sandbox"
+working_directory = "/"
+
+[[sandbox.mounts]]
+source = "/usr"
+destination = "/usr"
+type = "bind"
+mode = "ro"
+
+[[sandbox.mounts]]
+source = "tmpfs"
+destination = "/tmp"
+type = "tmpfs"
+mode = "rw"
 ```
 
-### Capabilities
+Profiles are stored in `~/.hops/profiles/` and selected with `--profile <name>`.
 
-```toml
-[capabilities]
-network = "disabled"  # disabled | outbound | loopback | full
+## Architecture
 
-[capabilities.filesystem]
-read = [".", "/usr/lib"]
-write = ["./output"]
-execute = [".", "/usr/bin"]
 ```
+hops (CLI)
+  Commands/
+    RunCommand.swift      Command execution with policy loading
+    ProfileCommand.swift  Profile CRUD operations
+    SystemCommand.swift   Daemon lifecycle control
 
-### Resources
+hopsd (Daemon)
+  HopsDaemon.swift        Socket server and lifecycle
+  SandboxManager.swift    Container orchestration via Containerization.framework
+  ContainerService.swift  gRPC service implementation
+  CapabilityEnforcer.swift Policy-to-container translation
 
-```toml
-[resources]
-cpus = 2
-memory = "512M"
-max_processes = 100
-```
-
-## Example Profiles
-
-Hops includes several pre-configured profiles in `config/examples/`:
-
-- **default.toml**: Deny-all baseline (no network, minimal filesystem)
-- **development.toml**: Permissive for local development (loopback network, full toolchain access)
-- **untrusted.toml**: Maximum restriction for untrusted code
-- **network-allowed.toml**: Outbound network with project-scoped filesystem
-
-## CLI Usage
-
-```bash
-hops run [OPTIONS] -- COMMAND [ARGS...]
-  --policy PATH       Policy file to use (default: config/default.toml)
-  
-hops stop SANDBOX_ID
-  Stop a running sandbox
-
-hops list
-  List all running sandboxes
-
-hops status SANDBOX_ID
-  Get detailed status of a sandbox
+HopsCore (Library)
+  Policy.swift            Policy and sandbox configuration models
+  Capability.swift        Network, filesystem, and resource capability types
+  Mount.swift             Mount configuration types
+  PolicyParser.swift      TOML parsing
+  PolicyValidator.swift   Security validation
 ```
 
 ## Development
 
-### Build
-
 ```bash
 swift build
-```
-
-### Test
-
-```bash
 swift test
 ```
 
-### Generate gRPC code
+Requires Swift 5.9+ and macOS 14+. The Containerization framework is only available on macOS with Apple Silicon.
 
-```bash
-protoc --swift_out=. --grpc-swift_out=. proto/hops.proto
-```
+Key dependencies: swift-argument-parser, TOMLKit, grpc-swift, swift-nio.
 
 ## License
 
-MIT
-
-## Contributing
-
-Contributions are welcome. Please ensure all tests pass before submitting a pull request.
+MIT License
