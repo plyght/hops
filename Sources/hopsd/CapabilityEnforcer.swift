@@ -8,7 +8,9 @@ enum CapabilityEnforcer {
     static func configure(
         config: inout LinuxContainer.Configuration,
         policy: Policy,
-        command: [String]
+        command: [String],
+        stdout: (any Writer)? = nil,
+        stderr: (any Writer)? = nil
     ) {
         let capabilities = policy.capabilities
         let sandbox = policy.sandbox
@@ -19,6 +21,14 @@ enum CapabilityEnforcer {
         
         for (key, value) in sandbox.environment {
             config.process.environmentVariables.append("\(key)=\(value)")
+        }
+        
+        if let stdout = stdout {
+            config.process.stdout = stdout
+        }
+        
+        if let stderr = stderr {
+            config.process.stderr = stderr
         }
         
         configureResources(config: &config, limits: capabilities.resourceLimits)

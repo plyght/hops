@@ -147,11 +147,26 @@ actor SandboxManager {
                         destination: "/"
                     )
                     
+                    let stdoutWriter = StreamingWriter(
+                        continuation: continuation,
+                        sandboxId: id,
+                        type: .stdout,
+                        logger: logger
+                    )
+                    let stderrWriter = StreamingWriter(
+                        continuation: continuation,
+                        sandboxId: id,
+                        type: .stderr,
+                        logger: logger
+                    )
+                    
                     let container = try LinuxContainer(id, rootfs: rootfsMount, vmm: vmm) { config in
                         CapabilityEnforcer.configure(
                             config: &config,
                             policy: policy,
-                            command: command
+                            command: command,
+                            stdout: stdoutWriter,
+                            stderr: stderrWriter
                         )
                     }
                     
@@ -279,6 +294,51 @@ actor SandboxManager {
             info.exitCode = exitCode
             containerInfo[id] = info
         }
+    }
+}
+
+final class StreamingWriter: Writer, Sendable {
+    private let continuation: AsyncThrowingStream<StreamingOutputChunk, Error>.Continuation
+    private let sandboxId: String
+    private let type: StreamingOutputType
+    private let logger: Logger
+    
+    init(
+        continuation: AsyncThrowingStream<StreamingOutputChunk, Error>.Continuation,
+        sandboxId: String,
+        type: StreamingOutputType,
+        logger: Logger
+    ) {
+        self.continuation = continuation
+        self.sandboxId = sandboxId
+        self.type = type
+        self.logger = logger
+    }
+    
+    func write(_ data: Data) throws {
+        guard !data.isEmpty else { return }
+        
+        let chunk = StreamingOutputChunk(
+            sandboxId: sandboxId,
+            type: type,
+            data: data,
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+        
+        continuation.yield(chunk)
+        
+        logger.debug("Streamed output chunk", metadata: [
+            "sandboxId": "\(sandboxId)",
+            "type": "\(type)",
+            "bytes": "\(data.count)"
+        ])
+    }
+    
+    func close() throws {
+        logger.debug("Closing writer", metadata: [
+            "sandboxId": "\(sandboxId)",
+            "type": "\(type)"
+        ])
     }
 }
 
