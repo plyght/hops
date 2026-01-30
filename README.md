@@ -12,7 +12,7 @@ Hops isolates processes in controlled sandbox environments using [Apple's Contai
 
 ## Requirements
 
-- **macOS 26 (Sequoia)** or later
+- **macOS 26 (Tahoe)** or later
 - **Apple Silicon** (M1/M2/M3/M4)
 - **Swift 6.0+**
 - **Rust 1.75+** (GUI only)
