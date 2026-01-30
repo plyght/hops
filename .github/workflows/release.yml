@@ -261,6 +261,9 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install protobuf compiler
+        run: brew install protobuf
+
       - name: Build GUI
         working-directory: hops-gui
         run: cargo build --release --target aarch64-apple-darwin
